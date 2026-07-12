@@ -42,6 +42,36 @@ namespace PaintTranslator
         private string sourcePhotoName;
 
         /// <summary>
+        /// Space between the hover tooltip's border and its text, in pixels.
+        /// </summary>
+        private const int TooltipPadding = 6;
+
+        /// <summary>
+        /// Matches hovered photo pixels to their closest achievable paint mixture.
+        /// Built lazily from the checked paints on first hover and reset to null
+        /// whenever the selection changes, so it always reflects the current paints.
+        /// </summary>
+        private PaintBlendMatcher blendMatcher;
+
+        /// <summary>
+        /// The text lines of the hover tooltip (pixel RGB plus blend percentages),
+        /// or null while no tooltip is showing.
+        /// </summary>
+        private string[] blendTooltipLines;
+
+        /// <summary>
+        /// The cursor position the tooltip is anchored to, in picture box client
+        /// coordinates.
+        /// </summary>
+        private Point blendTooltipAnchor;
+
+        /// <summary>
+        /// The box the tooltip last painted into, kept so mouse movement can
+        /// invalidate just the old and new tooltip areas instead of the whole image.
+        /// </summary>
+        private Rectangle blendTooltipDrawnBounds;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="MainForm"/> class.
         /// </summary>
         public MainForm()
@@ -61,6 +91,10 @@ namespace PaintTranslator
         /// or null to show the full catalog.</param>
         private void PopulatePaintList(ISet<string> paletteNames)
         {
+            // The list contents define which mixtures are achievable, so any
+            // cached hover matcher no longer applies.
+            blendMatcher = null;
+
             // Adding checked items fires ItemCheck per item; suppress the
             // select-all sync during the rebuild and set it once at the end.
             suppressPaintCheckEvents = true;
@@ -276,6 +310,10 @@ namespace PaintTranslator
                 return;
             }
 
+            // The check change alters which paints can mix, so the hover matcher
+            // must be rebuilt from the new selection on next use.
+            blendMatcher = null;
+
             List<Color> selected = GetSelectedPaintColors(e);
 
             // Mirror the list state onto the select-all checkbox without letting
@@ -314,6 +352,10 @@ namespace PaintTranslator
                 return;
             }
 
+            // Bulk check changes alter which paints can mix, so the hover matcher
+            // must be rebuilt from the new selection on next use.
+            blendMatcher = null;
+
             suppressPaintCheckEvents = true;
             try
             {
@@ -336,15 +378,15 @@ namespace PaintTranslator
         }
 
         /// <summary>
-        /// Collects the colors of all checked paints, in palette order.
+        /// Collects all checked paints, in palette order.
         /// </summary>
         /// <param name="pendingChange">A check change that has not been applied yet
         /// (ItemCheck fires before the state updates), or null to read the current
         /// states as-is.</param>
-        /// <returns>The mass-tone colors of the checked paints.</returns>
-        private List<Color> GetSelectedPaintColors(ItemCheckEventArgs pendingChange)
+        /// <returns>The checked paints.</returns>
+        private List<GoldenPaint> GetSelectedPaints(ItemCheckEventArgs pendingChange)
         {
-            var colors = new List<Color>(paintsCheckedListBox.Items.Count);
+            var paints = new List<GoldenPaint>(paintsCheckedListBox.Items.Count);
 
             for (int i = 0; i < paintsCheckedListBox.Items.Count; i++)
             {
@@ -356,8 +398,27 @@ namespace PaintTranslator
 
                 if (isChecked && paintsCheckedListBox.Items[i] is GoldenPaint paint)
                 {
-                    colors.Add(paint.Color);
+                    paints.Add(paint);
                 }
+            }
+
+            return paints;
+        }
+
+        /// <summary>
+        /// Collects the colors of all checked paints, in palette order.
+        /// </summary>
+        /// <param name="pendingChange">A check change that has not been applied yet
+        /// (ItemCheck fires before the state updates), or null to read the current
+        /// states as-is.</param>
+        /// <returns>The mass-tone colors of the checked paints.</returns>
+        private List<Color> GetSelectedPaintColors(ItemCheckEventArgs pendingChange)
+        {
+            List<GoldenPaint> paints = GetSelectedPaints(pendingChange);
+            var colors = new List<Color>(paints.Count);
+            foreach (GoldenPaint paint in paints)
+            {
+                colors.Add(paint.Color);
             }
 
             return colors;
@@ -374,33 +435,37 @@ namespace PaintTranslator
         }
 
         /// <summary>
-        /// Paints the grid overlay on top of the displayed image.
+        /// Paints the grid overlay and the blend tooltip on top of the displayed image.
         /// </summary>
         /// <param name="sender">The picture box being painted.</param>
         /// <param name="e">The paint event arguments providing the graphics surface.</param>
         private void ImagePictureBox_Paint(object sender, PaintEventArgs e)
         {
             // The base PictureBox paint has already drawn the image; nothing to
-            // overlay when no image is loaded or the grid is toggled off.
-            if (imagePictureBox.Image == null || !showGridCheckBox.Checked)
+            // overlay when no image is loaded.
+            if (imagePictureBox.Image == null)
             {
                 return;
             }
 
-            // The grid must cover the image itself, not the whole control, so compute
-            // where Zoom mode actually placed the image within the client area.
-            RectangleF imageBounds = GridOverlayRenderer.GetZoomedImageBounds(
-                imagePictureBox.ClientSize, imagePictureBox.Image.Size);
-            if (imageBounds.IsEmpty)
+            if (showGridCheckBox.Checked)
             {
-                return;
+                // The grid must cover the image itself, not the whole control, so compute
+                // where Zoom mode actually placed the image within the client area.
+                RectangleF imageBounds = GridOverlayRenderer.GetZoomedImageBounds(
+                    imagePictureBox.ClientSize, imagePictureBox.Image.Size);
+                if (!imageBounds.IsEmpty)
+                {
+                    GridOverlayRenderer.DrawGrid(
+                        e.Graphics,
+                        imageBounds,
+                        (int)columnsNumericUpDown.Value,
+                        (int)rowsNumericUpDown.Value);
+                }
             }
 
-            GridOverlayRenderer.DrawGrid(
-                e.Graphics,
-                imageBounds,
-                (int)columnsNumericUpDown.Value,
-                (int)rowsNumericUpDown.Value);
+            // Drawn last so the tooltip sits above the grid lines.
+            DrawBlendTooltip(e.Graphics);
         }
 
         /// <summary>
@@ -415,12 +480,315 @@ namespace PaintTranslator
         }
 
         /// <summary>
+        /// Updates the blend tooltip as the mouse moves over the picture box, so it
+        /// tracks the cursor and describes the pixel underneath it.
+        /// </summary>
+        /// <param name="sender">The picture box the mouse moved over.</param>
+        /// <param name="e">The event arguments carrying the cursor position.</param>
+        private void ImagePictureBox_MouseMove(object sender, MouseEventArgs e)
+        {
+            UpdateBlendTooltip(e.Location);
+        }
+
+        /// <summary>
+        /// Hides the blend tooltip when the mouse leaves the picture box.
+        /// </summary>
+        /// <param name="sender">The picture box the mouse left.</param>
+        /// <param name="e">The event arguments.</param>
+        private void ImagePictureBox_MouseLeave(object sender, EventArgs e)
+        {
+            HideBlendTooltip();
+        }
+
+        /// <summary>
+        /// Recomputes the blend tooltip for a cursor position: resolves which image
+        /// pixel sits under the cursor, derives that pixel's paint blend (exact wheel
+        /// weights for a generated wheel, the closest achievable mixture for a photo),
+        /// and moves the tooltip beside the cursor.
+        /// </summary>
+        /// <param name="cursor">The cursor position in picture box client coordinates.</param>
+        private void UpdateBlendTooltip(Point cursor)
+        {
+            // Every displayed image is created as a Bitmap; anything else (or no
+            // image at all) has no pixels to sample.
+            if (!(imagePictureBox.Image is Bitmap bitmap))
+            {
+                HideBlendTooltip();
+                return;
+            }
+
+            // Only the zoomed image area counts; the letterbox around it shows
+            // the control's background, not image pixels.
+            RectangleF bounds = GridOverlayRenderer.GetZoomedImageBounds(
+                imagePictureBox.ClientSize, bitmap.Size);
+            if (bounds.IsEmpty || !bounds.Contains(cursor))
+            {
+                HideBlendTooltip();
+                return;
+            }
+
+            // Map the cursor from control coordinates back to a source pixel; the
+            // clamp guards the bottom and right edges, where rounding can land one
+            // pixel past the image.
+            int pixelX = Math.Clamp((int)((cursor.X - bounds.Left) * bitmap.Width / bounds.Width), 0, bitmap.Width - 1);
+            int pixelY = Math.Clamp((int)((cursor.Y - bounds.Top) * bitmap.Height / bounds.Height), 0, bitmap.Height - 1);
+
+            Color pixel = bitmap.GetPixel(pixelX, pixelY);
+
+            // Fully transparent pixels are the empty surround of the color wheel;
+            // there is no paint there to describe.
+            if (pixel.A == 0)
+            {
+                HideBlendTooltip();
+                return;
+            }
+
+            string[] lines = wheelDisplayed
+                ? BuildWheelBlendLines(pixel, pixelX, pixelY, bitmap.Width)
+                : BuildClosestMixLines(pixel);
+            if (lines == null)
+            {
+                HideBlendTooltip();
+                return;
+            }
+
+            // Repaint only where the tooltip was and where it lands, so tracking
+            // the mouse doesn't redraw the whole scaled image on every move.
+            Rectangle previous = blendTooltipDrawnBounds;
+            blendTooltipLines = lines;
+            blendTooltipAnchor = cursor;
+            blendTooltipDrawnBounds = GetBlendTooltipBounds();
+            imagePictureBox.Invalidate(previous.IsEmpty
+                ? blendTooltipDrawnBounds
+                : Rectangle.Union(previous, blendTooltipDrawnBounds));
+        }
+
+        /// <summary>
+        /// Hides the blend tooltip and repaints the area it occupied.
+        /// </summary>
+        private void HideBlendTooltip()
+        {
+            if (blendTooltipLines == null)
+            {
+                return;
+            }
+
+            blendTooltipLines = null;
+            Rectangle previous = blendTooltipDrawnBounds;
+            blendTooltipDrawnBounds = Rectangle.Empty;
+            imagePictureBox.Invalidate(previous);
+        }
+
+        /// <summary>
+        /// Builds the tooltip lines for a pixel of the generated color wheel, whose
+        /// blend is known exactly from the wheel's geometry.
+        /// </summary>
+        /// <param name="pixel">The color of the hovered pixel.</param>
+        /// <param name="pixelX">The pixel's horizontal position in the wheel bitmap.</param>
+        /// <param name="pixelY">The pixel's vertical position in the wheel bitmap.</param>
+        /// <param name="wheelDiameter">The wheel bitmap's diameter in pixels.</param>
+        /// <returns>The tooltip lines, or null when the pixel lies outside the wheel.</returns>
+        private string[] BuildWheelBlendLines(Color pixel, int pixelX, int pixelY, int wheelDiameter)
+        {
+            List<GoldenPaint> paints = GetSelectedPaints(null);
+            double[] weights = ColorWheelGenerator.GetBlendWeights(wheelDiameter, paints.Count, pixelX, pixelY);
+            return weights == null ? null : ComposeBlendLines(pixel, paints, weights, null);
+        }
+
+        /// <summary>
+        /// Builds the tooltip lines for a photo pixel by finding the closest mixture
+        /// of the checked paints, since an arbitrary photo color carries no known
+        /// recipe of its own.
+        /// </summary>
+        /// <param name="pixel">The color of the hovered pixel.</param>
+        /// <returns>The tooltip lines; only the RGB line when no paints are checked.</returns>
+        private string[] BuildClosestMixLines(Color pixel)
+        {
+            List<GoldenPaint> paints = GetSelectedPaints(null);
+
+            // With nothing checked there is no mix to suggest; still report the RGB.
+            if (paints.Count == 0)
+            {
+                return new[] { FormatRgbLine(pixel) };
+            }
+
+            // The matcher is costly to build, so it is created on first hover and
+            // reused until the paint selection changes.
+            if (blendMatcher == null)
+            {
+                var colors = new List<Color>(paints.Count);
+                foreach (GoldenPaint paint in paints)
+                {
+                    colors.Add(paint.Color);
+                }
+                blendMatcher = new PaintBlendMatcher(colors);
+            }
+
+            PaintBlendMatcher.BlendMatch match = blendMatcher.FindClosestBlend(pixel);
+
+            // Spread the recipe back over the full paint list so the shared line
+            // builder can treat wheel and photo blends identically.
+            var weights = new double[paints.Count];
+            for (int i = 0; i < match.PaintIndices.Count; i++)
+            {
+                weights[match.PaintIndices[i]] = match.Weights[i];
+            }
+
+            return ComposeBlendLines(pixel, paints, weights, "Closest mix:");
+        }
+
+        /// <summary>
+        /// Formats the RGB header line of the tooltip.
+        /// </summary>
+        /// <param name="pixel">The hovered pixel color.</param>
+        /// <returns>The formatted RGB line.</returns>
+        private static string FormatRgbLine(Color pixel)
+        {
+            return $"RGB: {pixel.R}, {pixel.G}, {pixel.B}";
+        }
+
+        /// <summary>
+        /// Composes the tooltip text: the pixel's RGB line, an optional header, and
+        /// the blend's paints with their percentage shares, largest first. Only the
+        /// top five paints get their own line; smaller contributors are rolled into
+        /// a single "+N more" line so wheels built from many paints stay readable.
+        /// </summary>
+        /// <param name="pixel">The hovered pixel color.</param>
+        /// <param name="paints">The paints the weights refer to, index-aligned.</param>
+        /// <param name="weights">Each paint's share of the blend, summing to 1.</param>
+        /// <param name="header">A line inserted between the RGB line and the paint
+        /// lines, or null for none.</param>
+        /// <returns>The tooltip lines.</returns>
+        private static string[] ComposeBlendLines(Color pixel, List<GoldenPaint> paints, double[] weights, string header)
+        {
+            const int MaxNamedPaints = 5;
+
+            // Shares below half a percent would display as 0%, so they only count
+            // toward the aggregated remainder line.
+            const double MinVisibleShare = 0.005;
+
+            var order = new List<int>(weights.Length);
+            for (int i = 0; i < weights.Length; i++)
+            {
+                order.Add(i);
+            }
+            order.Sort((first, second) => weights[second].CompareTo(weights[first]));
+
+            var lines = new List<string> { FormatRgbLine(pixel) };
+            if (header != null)
+            {
+                lines.Add(header);
+            }
+
+            int named = 0;
+            int others = 0;
+            double othersShare = 0.0;
+            foreach (int index in order)
+            {
+                if (named < MaxNamedPaints && weights[index] >= MinVisibleShare)
+                {
+                    lines.Add($"{paints[index].Name}: {weights[index] * 100:0}%");
+                    named++;
+                }
+                else if (weights[index] > 0.0)
+                {
+                    others++;
+                    othersShare += weights[index];
+                }
+            }
+
+            if (others > 0 && othersShare >= MinVisibleShare)
+            {
+                lines.Add($"+{others} more: {othersShare * 100:0}%");
+            }
+
+            return lines.ToArray();
+        }
+
+        /// <summary>
+        /// Computes where the tooltip box should render: offset below-right of the
+        /// cursor, flipped to the opposite side when it would run past the picture
+        /// box edge, and sized to its measured text.
+        /// </summary>
+        /// <returns>The tooltip bounds in picture box client coordinates, or an
+        /// empty rectangle when no tooltip is showing.</returns>
+        private Rectangle GetBlendTooltipBounds()
+        {
+            if (blendTooltipLines == null)
+            {
+                return Rectangle.Empty;
+            }
+
+            int textWidth = 0;
+            foreach (string line in blendTooltipLines)
+            {
+                textWidth = Math.Max(textWidth, TextRenderer.MeasureText(
+                    line, Font, new Size(int.MaxValue, int.MaxValue), TextFormatFlags.NoPadding).Width);
+            }
+
+            int width = textWidth + 2 * TooltipPadding;
+            int height = blendTooltipLines.Length * Font.Height + 2 * TooltipPadding;
+
+            // The offset clears the cursor arrow; flipping to the other side of the
+            // cursor keeps the box inside the control near the right and bottom edges.
+            int x = blendTooltipAnchor.X + 16;
+            int y = blendTooltipAnchor.Y + 20;
+            if (x + width > imagePictureBox.ClientSize.Width)
+            {
+                x = blendTooltipAnchor.X - width - 8;
+            }
+            if (y + height > imagePictureBox.ClientSize.Height)
+            {
+                y = blendTooltipAnchor.Y - height - 8;
+            }
+
+            return new Rectangle(Math.Max(0, x), Math.Max(0, y), width, height);
+        }
+
+        /// <summary>
+        /// Draws the blend tooltip beside the cursor: a dark box listing the hovered
+        /// pixel's RGB values and its paint blend percentages.
+        /// </summary>
+        /// <param name="graphics">The graphics surface to draw on.</param>
+        private void DrawBlendTooltip(Graphics graphics)
+        {
+            if (blendTooltipLines == null)
+            {
+                return;
+            }
+
+            Rectangle box = GetBlendTooltipBounds();
+
+            // A translucent dark box with a light border stays legible over both
+            // light and dark image areas.
+            using (var background = new SolidBrush(Color.FromArgb(220, 32, 32, 32)))
+            {
+                graphics.FillRectangle(background, box);
+            }
+            using (var border = new Pen(Color.FromArgb(220, 180, 180, 180)))
+            {
+                graphics.DrawRectangle(border, box.X, box.Y, box.Width - 1, box.Height - 1);
+            }
+
+            int textY = box.Y + TooltipPadding;
+            foreach (string line in blendTooltipLines)
+            {
+                TextRenderer.DrawText(graphics, line, Font,
+                    new Point(box.X + TooltipPadding, textY), Color.White, TextFormatFlags.NoPadding);
+                textY += Font.Height;
+            }
+        }
+
+        /// <summary>
         /// Replaces the currently displayed image, disposing the previous one to
         /// avoid leaking GDI handles.
         /// </summary>
         /// <param name="image">The new image to display.</param>
         private void SetDisplayedImage(Image image)
         {
+            // Whatever blend the tooltip showed belonged to the old image's pixels.
+            HideBlendTooltip();
+
             Image previous = imagePictureBox.Image;
             imagePictureBox.Image = image;
             previous?.Dispose();

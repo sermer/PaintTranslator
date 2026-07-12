@@ -556,7 +556,7 @@ namespace PaintTranslator.Imaging
         /// <param name="labL">The resulting L* component.</param>
         /// <param name="labA">The resulting a* component.</param>
         /// <param name="labB">The resulting b* component.</param>
-        private static void RgbToLab(int r, int g, int b, out double labL, out double labA, out double labB)
+        internal static void RgbToLab(int r, int g, int b, out double labL, out double labA, out double labB)
         {
             double rl = SrgbToLinear(r);
             double gl = SrgbToLinear(g);

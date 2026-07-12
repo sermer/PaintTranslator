@@ -147,6 +147,8 @@ namespace PaintTranslator
             this.imagePictureBox.TabIndex = 8;
             this.imagePictureBox.TabStop = false;
             this.imagePictureBox.Paint += new System.Windows.Forms.PaintEventHandler(this.ImagePictureBox_Paint);
+            this.imagePictureBox.MouseLeave += new System.EventHandler(this.ImagePictureBox_MouseLeave);
+            this.imagePictureBox.MouseMove += new System.Windows.Forms.MouseEventHandler(this.ImagePictureBox_MouseMove);
             this.imagePictureBox.Resize += new System.EventHandler(this.ImagePictureBox_Resize);
             //
             // palettePanel

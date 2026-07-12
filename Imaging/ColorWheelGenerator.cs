@@ -173,6 +173,77 @@ namespace PaintTranslator.Imaging
         }
 
         /// <summary>
+        /// Computes each paint's share of the mixture at a given pixel of a wheel
+        /// produced by <see cref="Create(int, IReadOnlyList{Color})"/>, using the same
+        /// geometry: the two paints flanking the pixel's angle contribute in proportion
+        /// to its distance from the center (the rim share), and the remaining center
+        /// share is split equally among all the paints.
+        /// </summary>
+        /// <param name="diameter">The diameter the wheel was generated with, in pixels.</param>
+        /// <param name="paintCount">The number of paints the wheel was generated from.</param>
+        /// <param name="x">The pixel's horizontal position within the wheel bitmap.</param>
+        /// <param name="y">The pixel's vertical position within the wheel bitmap.</param>
+        /// <returns>Each paint's mixing weight, index-aligned with the generating paint
+        /// list and summing to 1, or null when the pixel lies outside the wheel or
+        /// there are no paints.</returns>
+        public static double[] GetBlendWeights(int diameter, int paintCount, int x, int y)
+        {
+            if (paintCount < 1)
+            {
+                return null;
+            }
+
+            float center = (diameter - 1) / 2f;
+            float radius = diameter / 2f;
+            float dx = x - center;
+            float dy = y - center;
+            float distance = (float)Math.Sqrt(dx * dx + dy * dy);
+
+            // Match Create's alpha cutoff so weights exist exactly where the wheel
+            // has visible pixels.
+            if (radius - distance <= 0f)
+            {
+                return null;
+            }
+
+            // Same wedge math as Create: the angle picks the two flanking paints
+            // and how far between their anchors the pixel sits.
+            double angle = Math.Atan2(dy, dx);
+            if (angle < 0.0)
+            {
+                angle += 2.0 * Math.PI;
+            }
+
+            double position = angle * paintCount / (2.0 * Math.PI);
+            int lower = (int)position;
+            double blend = position - lower;
+
+            // Rounding can push an angle just below 2π up to a position of
+            // exactly paintCount; that pixel belongs at the start of wedge 0.
+            if (lower >= paintCount)
+            {
+                lower = 0;
+                blend = 0.0;
+            }
+            int upper = (lower + 1) % paintCount;
+
+            // Absorbances mix linearly, so the pixel's color decomposes exactly:
+            // the center share spreads equally over every paint and the rim share
+            // splits between the two flanking paints.
+            double rimShare = Math.Min(distance / radius, 1.0);
+            var weights = new double[paintCount];
+            double centerShare = (1.0 - rimShare) / paintCount;
+            for (int i = 0; i < paintCount; i++)
+            {
+                weights[i] = centerShare;
+            }
+            weights[lower] += rimShare * (1.0 - blend);
+            weights[upper] += rimShare * blend;
+
+            return weights;
+        }
+
+        /// <summary>
         /// Creates a color wheel from the full Golden palette and saves it to disk as
         /// a PNG, creating the target directory if it does not exist.
         /// </summary>
