@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net5.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>PaintTranslator</RootNamespace>
+    <AssemblyName>PaintTranslator</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BlendTests is its own project; keep its sources out of this project's default globs. -->
+    <Compile Remove="BlendTests\**" />
+    <EmbeddedResource Remove="BlendTests\**" />
+    <None Remove="BlendTests\**" />
+  </ItemGroup>
+
+</Project>
