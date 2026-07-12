@@ -109,11 +109,12 @@ namespace PaintTranslator.Imaging
 
             int count = paintColors.Count;
 
-            // Mixing happens in absorbance space, so convert each paint once.
-            var absorption = new double[count][];
+            // Convert each paint to its mixing spectrum once; every sampled
+            // mixture below reuses these.
+            var spectra = new PaintSpectrum[count];
             for (int i = 0; i < count; i++)
             {
-                absorption[i] = SubtractivePaintMixer.ToAbsorption(paintColors[i]);
+                spectra[i] = SubtractivePaintMixer.ToSpectrum(paintColors[i]);
             }
 
             var seen = new HashSet<int>();
@@ -136,10 +137,9 @@ namespace PaintTranslator.Imaging
                 {
                     foreach (double w in PairRatios)
                     {
-                        Color mixed = SubtractivePaintMixer.FromAbsorption(
-                            (1.0 - w) * absorption[i][0] + w * absorption[j][0],
-                            (1.0 - w) * absorption[i][1] + w * absorption[j][1],
-                            (1.0 - w) * absorption[i][2] + w * absorption[j][2]);
+                        Color mixed = SubtractivePaintMixer.Mix(
+                            new[] { spectra[i], spectra[j] },
+                            new[] { 1.0 - w, w });
                         AddCandidate(mixed, new[] { i, j }, new[] { 1.0 - w, w }, seen, argbs, recipePaints, recipeWeights);
                     }
                 }
@@ -158,10 +158,8 @@ namespace PaintTranslator.Imaging
                         {
                             foreach (double[] w in TripleWeights)
                             {
-                                Color mixed = SubtractivePaintMixer.FromAbsorption(
-                                    w[0] * absorption[i][0] + w[1] * absorption[j][0] + w[2] * absorption[k][0],
-                                    w[0] * absorption[i][1] + w[1] * absorption[j][1] + w[2] * absorption[k][1],
-                                    w[0] * absorption[i][2] + w[1] * absorption[j][2] + w[2] * absorption[k][2]);
+                                Color mixed = SubtractivePaintMixer.Mix(
+                                    new[] { spectra[i], spectra[j], spectra[k] }, w);
                                 AddCandidate(mixed, new[] { i, j, k }, (double[])w.Clone(), seen, argbs, recipePaints, recipeWeights);
                             }
                         }

@@ -35,7 +35,7 @@ namespace PaintTranslator.Imaging
         /// Creates a color wheel bitmap from the given paint colors. Each color sits at
         /// full concentration at an anchor point on the rim, evenly spaced in list order
         /// clockwise from the 3 o'clock position. Between anchors, the two flanking
-        /// paints mix subtractively (in absorbance space) in proportion to the angle,
+        /// paints mix subtractively (via <see cref="SubtractivePaintMixer"/>) in proportion to the angle,
         /// giving each paint a wedge that blends into its neighbors; moving inward,
         /// every color mixes toward the equal-parts blend of all the paints at the
         /// center, the way pigments darken as more paints join the mix. Pixels outside
@@ -69,26 +69,28 @@ namespace PaintTranslator.Imaging
             float radius = diameter / 2f;
             int count = paintColors.Count;
 
-            // Precompute each paint's per-channel absorbances once; the hot per-pixel
-            // loop then only blends numbers in that space.
-            var absorption = new double[count][];
+            // Precompute each paint's mixing spectrum once; the hot per-pixel loop
+            // then only combines numbers in Kubelka-Munk space.
+            var spectra = new PaintSpectrum[count];
             for (int i = 0; i < count; i++)
             {
-                absorption[i] = SubtractivePaintMixer.ToAbsorption(paintColors[i]);
+                spectra[i] = SubtractivePaintMixer.ToSpectrum(paintColors[i]);
             }
 
-            // The equal-parts mixture of every paint — the color at the wheel's
-            // center, which each wedge darkens toward as it approaches the middle.
-            double centerRed = 0.0, centerGreen = 0.0, centerBlue = 0.0;
+            // Every pixel's mixture gives each paint at least the same base share,
+            // so the strength-weighted sums over all the paints are precomputed
+            // here and each pixel only adds its two flanking paints' surplus.
+            int bands = SubtractivePaintMixer.BandCount;
+            var strengthKsSum = new double[bands];
+            double strengthSum = 0.0;
             for (int i = 0; i < count; i++)
             {
-                centerRed += absorption[i][0];
-                centerGreen += absorption[i][1];
-                centerBlue += absorption[i][2];
+                strengthSum += spectra[i].Strength;
+                for (int band = 0; band < bands; band++)
+                {
+                    strengthKsSum[band] += spectra[i].Strength * spectra[i].Ks[band];
+                }
             }
-            centerRed /= count;
-            centerGreen /= count;
-            centerBlue /= count;
 
             // LockBits with direct buffer writes keeps generation fast; SetPixel would be
             // hundreds of times slower for a per-pixel fill like this.
@@ -100,6 +102,7 @@ namespace PaintTranslator.Imaging
             try
             {
                 byte[] buffer = new byte[data.Stride * diameter];
+                var ksMix = new double[bands];
 
                 for (int y = 0; y < diameter; y++)
                 {
@@ -140,18 +143,35 @@ namespace PaintTranslator.Imaging
                         }
                         int upper = (lower + 1) % count;
 
-                        double rimRed = (1.0 - blend) * absorption[lower][0] + blend * absorption[upper][0];
-                        double rimGreen = (1.0 - blend) * absorption[lower][1] + blend * absorption[upper][1];
-                        double rimBlue = (1.0 - blend) * absorption[lower][2] + blend * absorption[upper][2];
-
-                        // Moving inward mixes the rim color with the all-paints center
-                        // mixture, so wedges stay pure at the rim and darken toward the
-                        // muddy equal-parts blend in the middle.
+                        // Moving inward shifts weight from the two flanking paints to
+                        // an equal share for every paint, so wedges stay pure at the
+                        // rim and darken toward the muddy all-paints blend in the
+                        // middle. The mixture matches GetBlendWeights: a base share
+                        // per paint plus the rim share split across the flanking pair.
                         double rimShare = distance / radius;
-                        Color color = SubtractivePaintMixer.FromAbsorption(
-                            centerRed + rimShare * (rimRed - centerRed),
-                            centerGreen + rimShare * (rimGreen - centerGreen),
-                            centerBlue + rimShare * (rimBlue - centerBlue));
+                        double baseShare = (1.0 - rimShare) / count;
+                        double weightLower = baseShare + rimShare * (1.0 - blend);
+                        double weightUpper = baseShare + rimShare * blend;
+
+                        // Kubelka-Munk concentrations are squared-weight times
+                        // strength, so the pixel's K/S average is the precomputed
+                        // all-paints sum at the base share plus each flanking paint's
+                        // surplus over that base.
+                        double baseConcentration = baseShare * baseShare;
+                        double extraLower = (weightLower * weightLower - baseConcentration) * spectra[lower].Strength;
+                        double extraUpper = (weightUpper * weightUpper - baseConcentration) * spectra[upper].Strength;
+                        double totalConcentration = baseConcentration * strengthSum + extraLower + extraUpper;
+
+                        double[] ksLower = spectra[lower].Ks;
+                        double[] ksUpper = spectra[upper].Ks;
+                        for (int band = 0; band < bands; band++)
+                        {
+                            ksMix[band] = (baseConcentration * strengthKsSum[band]
+                                + extraLower * ksLower[band]
+                                + extraUpper * ksUpper[band]) / totalConcentration;
+                        }
+
+                        Color color = SubtractivePaintMixer.FromMixedKs(ksMix);
 
                         // Pixel layout for Format32bppArgb is B, G, R, A in memory.
                         int offset = y * data.Stride + x * 4;
@@ -227,9 +247,9 @@ namespace PaintTranslator.Imaging
             }
             int upper = (lower + 1) % paintCount;
 
-            // Absorbances mix linearly, so the pixel's color decomposes exactly:
-            // the center share spreads equally over every paint and the rim share
-            // splits between the two flanking paints.
+            // These are the same shares Create feeds to the mixer: the center
+            // share spreads equally over every paint and the rim share splits
+            // between the two flanking paints.
             double rimShare = Math.Min(distance / radius, 1.0);
             var weights = new double[paintCount];
             double centerShare = (1.0 - rimShare) / paintCount;
