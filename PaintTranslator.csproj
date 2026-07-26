@@ -6,13 +6,27 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>PaintTranslator</RootNamespace>
     <AssemblyName>PaintTranslator</AssemblyName>
+    <!-- Magick.NET ships native codecs per platform. Without a pinned RID, NuGet copies
+         the Linux and macOS binaries alongside the Windows ones and the build output
+         grows from 25 MB to 131 MB; this app is Windows-only, so pin it. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- BlendTests is its own project; keep its sources out of this project's default globs. -->
+    <!-- Decodes the formats GDI+ has no support for: WEBP, AVIF, HEIC/HEIF and PSD. -->
+    <PackageReference Include="Magick.NET-Q8-x64" Version="14.15.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BlendTests and Tests are their own projects; keep their sources out of this
+         project's default globs. -->
     <Compile Remove="BlendTests\**" />
     <EmbeddedResource Remove="BlendTests\**" />
     <None Remove="BlendTests\**" />
+    <Compile Remove="Tests\**" />
+    <EmbeddedResource Remove="Tests\**" />
+    <None Remove="Tests\**" />
   </ItemGroup>
 
 </Project>

@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PaintTranslator", "PaintTra
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PaintTranslator.BlendTests", "BlendTests\PaintTranslator.BlendTests.csproj", "{8F0E2490-F555-4237-A376-77B538A17BAB}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{0AB3BF05-4346-4AA6-1389-037BE0695223}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "PaintTranslator.Tests", "Tests\PaintTranslator.Tests.csproj", "{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -15,9 +19,6 @@ Global
 		Release|Any CPU = Release|Any CPU
 		Release|x64 = Release|x64
 		Release|x86 = Release|x86
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{9FEC164A-EFFE-4A3A-A9FB-7635CCA3A68E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -44,5 +45,23 @@ Global
 		{8F0E2490-F555-4237-A376-77B538A17BAB}.Release|x64.Build.0 = Release|Any CPU
 		{8F0E2490-F555-4237-A376-77B538A17BAB}.Release|x86.ActiveCfg = Release|Any CPU
 		{8F0E2490-F555-4237-A376-77B538A17BAB}.Release|x86.Build.0 = Release|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Debug|x64.Build.0 = Debug|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Debug|x86.Build.0 = Debug|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Release|Any CPU.Build.0 = Release|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Release|x64.ActiveCfg = Release|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Release|x64.Build.0 = Release|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Release|x86.ActiveCfg = Release|Any CPU
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61}.Release|x86.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{71418A9A-B2F8-4F0B-8D10-33CFC9809A61} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
 	EndGlobalSection
 EndGlobal

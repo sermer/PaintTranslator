@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using PaintTranslator.Data;
 using PaintTranslator.Imaging;
+using PaintTranslator.Input;
 
 namespace PaintTranslator
 {
@@ -60,7 +62,7 @@ namespace PaintTranslator
         private string[] blendTooltipLines;
 
         /// <summary>
-        /// The cursor position the tooltip is anchored to, in picture box client
+        /// The cursor position the tooltip is anchored to, in canvas client
         /// coordinates.
         /// </summary>
         private Point blendTooltipAnchor;
@@ -70,6 +72,20 @@ namespace PaintTranslator
         /// invalidate just the old and new tooltip areas instead of the whole image.
         /// </summary>
         private Rectangle blendTooltipDrawnBounds;
+
+        /// <summary>
+        /// The last cursor position seen over the canvas. Zooming under a stationary
+        /// cursor changes which pixel is being read, and there is no mouse move to
+        /// recompute the tooltip from.
+        /// </summary>
+        private Point lastCanvasCursor;
+
+        /// <summary>
+        /// Set while a load or conversion is running. Both read or replace
+        /// <see cref="sourcePhoto"/>, so a second one starting mid-flight would dispose
+        /// the bitmap the first is still working from.
+        /// </summary>
+        private bool imageOperationInProgress;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MainForm"/> class.
@@ -181,49 +197,208 @@ namespace PaintTranslator
         }
 
         /// <summary>
+        /// Turns click-to-zoom on the image on and off.
+        /// </summary>
+        /// <param name="sender">The magnifier toggle.</param>
+        /// <param name="e">The event arguments.</param>
+        private void MagnifierCheckBox_CheckedChanged(object sender, EventArgs e)
+        {
+            imageCanvas.MagnifierActive = magnifierCheckBox.Checked;
+        }
+
+        /// <summary>
         /// Opens a file dialog and loads the selected image into the picture box.
         /// </summary>
         /// <param name="sender">The button that raised the event.</param>
         /// <param name="e">The event arguments.</param>
-        private void LoadImageButton_Click(object sender, EventArgs e)
+        private async void LoadImageButton_Click(object sender, EventArgs e)
         {
             using (var dialog = new OpenFileDialog())
             {
                 dialog.Title = "Select an image";
-                dialog.Filter = "PNG images (*.png)|*.png|All images (*.png;*.jpg;*.jpeg;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.gif|All files (*.*)|*.*";
+                dialog.Filter = BuildImageFilter();
 
                 if (dialog.ShowDialog(this) != DialogResult.OK)
                 {
                     return;
                 }
 
-                try
-                {
-                    // Load through a memory copy so the file handle is released
-                    // immediately instead of staying locked while displayed.
-                    Bitmap loaded;
-                    using (var source = Image.FromFile(dialog.FileName))
-                    {
-                        loaded = new Bitmap(source);
-                    }
+                // Capture the path before the dialog is disposed, since the decode runs
+                // on a worker that outlives this block.
+                string path = dialog.FileName;
 
-                    // Keep the original separate from the displayed copy: the
-                    // display gets disposed on every image swap, while the
-                    // original must survive as the source for conversions.
-                    sourcePhoto?.Dispose();
-                    sourcePhoto = loaded;
-                    sourcePhotoName = System.IO.Path.GetFileName(dialog.FileName);
-
-                    SetDisplayedImage(new Bitmap(sourcePhoto));
-                    wheelDisplayed = false;
-                    Text = $"Paint Translator - {sourcePhotoName}";
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(this, $"Could not load the image:\n{ex.Message}",
-                        "Load failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+                await LoadImageAsync(() => Task.Run(() => new LoadedImage(
+                    ImageDecoder.DecodeFile(path), Path.GetFileName(path))));
             }
+        }
+
+        /// <summary>
+        /// Loads an image from the clipboard when the user presses Ctrl+V.
+        /// </summary>
+        /// <param name="msg">The window message carrying the key press.</param>
+        /// <param name="keyData">The key and modifiers that were pressed.</param>
+        /// <returns>True when the key press was handled here; otherwise the result of the
+        /// base implementation.</returns>
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            // Handled as a command key rather than a key press so it works no matter which
+            // control has focus, including the paint list.
+            if (keyData == (Keys.Control | Keys.V))
+            {
+                _ = PasteImageAsync();
+                return true;
+            }
+
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        /// <summary>
+        /// Loads whatever image the clipboard currently holds.
+        /// </summary>
+        /// <returns>A task that completes once the paste has finished or failed.</returns>
+        private async Task PasteImageAsync()
+        {
+            IDataObject data;
+            try
+            {
+                data = Clipboard.GetDataObject();
+            }
+            catch (Exception)
+            {
+                // Another application can hold the clipboard open, which fails the read;
+                // there is nothing useful to report for a keystroke the user may have
+                // pressed out of habit.
+                return;
+            }
+
+            if (data == null || !ImageDataObjectReader.ContainsImage(data))
+            {
+                MessageBox.Show(this, "The clipboard doesn't contain an image.",
+                    "Nothing to paste", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            await LoadImageAsync(() => ImageDataObjectReader.ReadAsync(data));
+        }
+
+        /// <summary>
+        /// Signals whether a dragged payload can be dropped, which is what makes the
+        /// cursor show a copy indicator instead of a rejection.
+        /// </summary>
+        /// <param name="sender">The control the payload was dragged over.</param>
+        /// <param name="e">The event arguments carrying the payload.</param>
+        private void ImageDragEnter(object sender, DragEventArgs e)
+        {
+            e.Effect = !imageOperationInProgress && ImageDataObjectReader.ContainsImage(e.Data)
+                ? DragDropEffects.Copy
+                : DragDropEffects.None;
+        }
+
+        /// <summary>
+        /// Loads an image dropped onto the window, whether it came from a file, another
+        /// application, or a web page.
+        /// </summary>
+        /// <param name="sender">The control the payload was dropped on.</param>
+        /// <param name="e">The event arguments carrying the payload.</param>
+        private async void ImageDragDrop(object sender, DragEventArgs e)
+        {
+            // The event arguments are reused once this handler returns, so hold the
+            // payload itself across the await rather than reaching through them later.
+            IDataObject data = e.Data;
+
+            await LoadImageAsync(() => ImageDataObjectReader.ReadAsync(data));
+        }
+
+        /// <summary>
+        /// Runs an image load: blocks competing operations, reports any failure, and
+        /// adopts the result. Every way into the application funnels through here so the
+        /// busy state and error handling stay identical across all of them.
+        /// </summary>
+        /// <param name="load">Produces the image to adopt, or null when the source turned
+        /// out to hold nothing usable.</param>
+        /// <returns>A task that completes once the load has finished or failed.</returns>
+        private async Task LoadImageAsync(Func<Task<LoadedImage>> load)
+        {
+            if (imageOperationInProgress)
+            {
+                return;
+            }
+
+            SetImageOperationInProgress(true);
+            try
+            {
+                LoadedImage loaded = await load();
+
+                if (loaded == null)
+                {
+                    MessageBox.Show(this, "That didn't contain an image this app can read.",
+                        "Load failed", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                AdoptSourcePhoto(loaded.Image, loaded.Name);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"Could not load the image:\n{ex.Message}",
+                    "Load failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                SetImageOperationInProgress(false);
+            }
+        }
+
+        /// <summary>
+        /// Takes ownership of a freshly loaded photo and displays it.
+        /// </summary>
+        /// <param name="photo">The loaded image. The form disposes it when the next photo
+        /// arrives.</param>
+        /// <param name="name">The name to show in the window title.</param>
+        private void AdoptSourcePhoto(Bitmap photo, string name)
+        {
+            // Keep the original separate from the displayed copy: the display gets
+            // disposed on every image swap, while the original must survive as the
+            // source for conversions.
+            sourcePhoto?.Dispose();
+            sourcePhoto = photo;
+            sourcePhotoName = name;
+
+            SetDisplayedImage(new Bitmap(sourcePhoto));
+            wheelDisplayed = false;
+            Text = $"Paint Translator - {sourcePhotoName}";
+        }
+
+        /// <summary>
+        /// Enables or disables the controls that would disturb an image operation while
+        /// one is running, and shows the wait cursor.
+        /// </summary>
+        /// <param name="inProgress">True when an operation is starting; false when it has
+        /// finished.</param>
+        private void SetImageOperationInProgress(bool inProgress)
+        {
+            imageOperationInProgress = inProgress;
+            loadImageButton.Enabled = !inProgress;
+            generateWheelButton.Enabled = !inProgress;
+            convertPhotoButton.Enabled = !inProgress;
+            UseWaitCursor = inProgress;
+        }
+
+        /// <summary>
+        /// Builds the file dialog filter from the formats the decoder supports, so the
+        /// dialog and the decoder cannot drift apart.
+        /// </summary>
+        /// <returns>A filter string listing all supported images, then all files.</returns>
+        private static string BuildImageFilter()
+        {
+            var patterns = new List<string>(ImageDecoder.SupportedExtensions.Length);
+            foreach (string extension in ImageDecoder.SupportedExtensions)
+            {
+                patterns.Add("*" + extension);
+            }
+
+            string joined = string.Join(";", patterns);
+            return $"All supported images ({joined})|{joined}|All files (*.*)|*.*";
         }
 
         /// <summary>
@@ -265,10 +440,7 @@ namespace PaintTranslator
             // Block image swaps while the background task reads sourcePhoto;
             // loading a new photo mid-conversion would dispose it out from under
             // the worker.
-            loadImageButton.Enabled = false;
-            generateWheelButton.Enabled = false;
-            convertPhotoButton.Enabled = false;
-            UseWaitCursor = true;
+            SetImageOperationInProgress(true);
             try
             {
                 // Read the option on the UI thread; the conversion itself runs
@@ -288,10 +460,7 @@ namespace PaintTranslator
             }
             finally
             {
-                loadImageButton.Enabled = true;
-                generateWheelButton.Enabled = true;
-                convertPhotoButton.Enabled = true;
-                UseWaitCursor = false;
+                SetImageOperationInProgress(false);
             }
         }
 
@@ -431,29 +600,29 @@ namespace PaintTranslator
         /// <param name="e">The event arguments.</param>
         private void GridSettingsChanged(object sender, EventArgs e)
         {
-            imagePictureBox.Invalidate();
+            imageCanvas.Invalidate();
         }
 
         /// <summary>
         /// Paints the grid overlay and the blend tooltip on top of the displayed image.
         /// </summary>
-        /// <param name="sender">The picture box being painted.</param>
+        /// <param name="sender">The canvas being painted.</param>
         /// <param name="e">The paint event arguments providing the graphics surface.</param>
-        private void ImagePictureBox_Paint(object sender, PaintEventArgs e)
+        private void ImageCanvas_Paint(object sender, PaintEventArgs e)
         {
-            // The base PictureBox paint has already drawn the image; nothing to
-            // overlay when no image is loaded.
-            if (imagePictureBox.Image == null)
+            // The canvas has already drawn the image in its own OnPaint; with nothing loaded
+            // there is no overlay to draw, so the empty area advertises how to load one.
+            if (imageCanvas.Image == null)
             {
+                DrawEmptyCanvasHint(e.Graphics);
                 return;
             }
 
             if (showGridCheckBox.Checked)
             {
-                // The grid must cover the image itself, not the whole control, so compute
-                // where Zoom mode actually placed the image within the client area.
-                RectangleF imageBounds = GridOverlayRenderer.GetZoomedImageBounds(
-                    imagePictureBox.ClientSize, imagePictureBox.Image.Size);
+                // The grid must cover the image itself, not the whole control, and it
+                // follows the image as that is zoomed and panned.
+                RectangleF imageBounds = imageCanvas.Viewport.GetImageBounds();
                 if (!imageBounds.IsEmpty)
                 {
                     GridOverlayRenderer.DrawGrid(
@@ -469,35 +638,72 @@ namespace PaintTranslator
         }
 
         /// <summary>
-        /// Repaints the overlay when the picture box is resized, since the displayed
-        /// image bounds change with the control size.
+        /// Draws the prompt shown on the empty canvas, so the drop and paste gestures are
+        /// discoverable rather than having to be guessed at.
         /// </summary>
-        /// <param name="sender">The picture box that was resized.</param>
-        /// <param name="e">The event arguments.</param>
-        private void ImagePictureBox_Resize(object sender, EventArgs e)
+        /// <param name="graphics">The graphics surface to draw on.</param>
+        private void DrawEmptyCanvasHint(Graphics graphics)
         {
-            imagePictureBox.Invalidate();
+            const string Hint = "Drop an image here, paste one with Ctrl+V, or use Load Image...";
+
+            // Dimmed rather than full white: the prompt should read as a placeholder and
+            // not compete with an image once one is loaded over it.
+            using (var brush = new SolidBrush(Color.FromArgb(150, 235, 235, 235)))
+            using (var format = new StringFormat
+            {
+                Alignment = StringAlignment.Center,
+                LineAlignment = StringAlignment.Center,
+            })
+            {
+                graphics.DrawString(Hint, Font, brush, imageCanvas.ClientRectangle, format);
+            }
         }
 
         /// <summary>
-        /// Updates the blend tooltip as the mouse moves over the picture box, so it
+        /// Updates the blend tooltip as the mouse moves over the canvas, so it
         /// tracks the cursor and describes the pixel underneath it.
         /// </summary>
-        /// <param name="sender">The picture box the mouse moved over.</param>
+        /// <param name="sender">The canvas the mouse moved over.</param>
         /// <param name="e">The event arguments carrying the cursor position.</param>
-        private void ImagePictureBox_MouseMove(object sender, MouseEventArgs e)
+        private void ImageCanvas_MouseMove(object sender, MouseEventArgs e)
         {
+            lastCanvasCursor = e.Location;
+
+            // A pan drag moves the image out from under the tooltip on every mouse move;
+            // reading a pixel per frame during a drag is both wrong and wasteful.
+            if (imageCanvas.IsPanning)
+            {
+                HideBlendTooltip();
+                return;
+            }
+
             UpdateBlendTooltip(e.Location);
         }
 
         /// <summary>
-        /// Hides the blend tooltip when the mouse leaves the picture box.
+        /// Hides the blend tooltip when the mouse leaves the canvas.
         /// </summary>
-        /// <param name="sender">The picture box the mouse left.</param>
+        /// <param name="sender">The canvas the mouse left.</param>
         /// <param name="e">The event arguments.</param>
-        private void ImagePictureBox_MouseLeave(object sender, EventArgs e)
+        private void ImageCanvas_MouseLeave(object sender, EventArgs e)
         {
             HideBlendTooltip();
+        }
+
+        /// <summary>
+        /// Recomputes the blend tooltip after a zoom or pan, since a different pixel is
+        /// now under a cursor that never moved.
+        /// </summary>
+        /// <param name="sender">The canvas whose view changed.</param>
+        /// <param name="e">The event arguments.</param>
+        private void ImageCanvas_ViewChanged(object sender, EventArgs e)
+        {
+            if (imageCanvas.IsPanning)
+            {
+                return;
+            }
+
+            UpdateBlendTooltip(lastCanvasCursor);
         }
 
         /// <summary>
@@ -506,34 +712,26 @@ namespace PaintTranslator
         /// weights for a generated wheel, the closest achievable mixture for a photo),
         /// and moves the tooltip beside the cursor.
         /// </summary>
-        /// <param name="cursor">The cursor position in picture box client coordinates.</param>
+        /// <param name="cursor">The cursor position in canvas client coordinates.</param>
         private void UpdateBlendTooltip(Point cursor)
         {
             // Every displayed image is created as a Bitmap; anything else (or no
             // image at all) has no pixels to sample.
-            if (!(imagePictureBox.Image is Bitmap bitmap))
+            if (!(imageCanvas.Image is Bitmap bitmap))
             {
                 HideBlendTooltip();
                 return;
             }
 
-            // Only the zoomed image area counts; the letterbox around it shows
-            // the control's background, not image pixels.
-            RectangleF bounds = GridOverlayRenderer.GetZoomedImageBounds(
-                imagePictureBox.ClientSize, bitmap.Size);
-            if (bounds.IsEmpty || !bounds.Contains(cursor))
+            // Only the image area itself carries pixels; the space around it shows the
+            // control's background.
+            if (!imageCanvas.Viewport.TryGetImagePixel(cursor, out Point pixelPoint))
             {
                 HideBlendTooltip();
                 return;
             }
 
-            // Map the cursor from control coordinates back to a source pixel; the
-            // clamp guards the bottom and right edges, where rounding can land one
-            // pixel past the image.
-            int pixelX = Math.Clamp((int)((cursor.X - bounds.Left) * bitmap.Width / bounds.Width), 0, bitmap.Width - 1);
-            int pixelY = Math.Clamp((int)((cursor.Y - bounds.Top) * bitmap.Height / bounds.Height), 0, bitmap.Height - 1);
-
-            Color pixel = bitmap.GetPixel(pixelX, pixelY);
+            Color pixel = bitmap.GetPixel(pixelPoint.X, pixelPoint.Y);
 
             // Fully transparent pixels are the empty surround of the color wheel;
             // there is no paint there to describe.
@@ -544,7 +742,7 @@ namespace PaintTranslator
             }
 
             string[] lines = wheelDisplayed
-                ? BuildWheelBlendLines(pixel, pixelX, pixelY, bitmap.Width)
+                ? BuildWheelBlendLines(pixel, pixelPoint.X, pixelPoint.Y, bitmap.Width)
                 : BuildClosestMixLines(pixel);
             if (lines == null)
             {
@@ -558,7 +756,7 @@ namespace PaintTranslator
             blendTooltipLines = lines;
             blendTooltipAnchor = cursor;
             blendTooltipDrawnBounds = GetBlendTooltipBounds();
-            imagePictureBox.Invalidate(previous.IsEmpty
+            imageCanvas.Invalidate(previous.IsEmpty
                 ? blendTooltipDrawnBounds
                 : Rectangle.Union(previous, blendTooltipDrawnBounds));
         }
@@ -576,7 +774,7 @@ namespace PaintTranslator
             blendTooltipLines = null;
             Rectangle previous = blendTooltipDrawnBounds;
             blendTooltipDrawnBounds = Rectangle.Empty;
-            imagePictureBox.Invalidate(previous);
+            imageCanvas.Invalidate(previous);
         }
 
         /// <summary>
@@ -707,10 +905,10 @@ namespace PaintTranslator
 
         /// <summary>
         /// Computes where the tooltip box should render: offset below-right of the
-        /// cursor, flipped to the opposite side when it would run past the picture
-        /// box edge, and sized to its measured text.
+        /// cursor, flipped to the opposite side when it would run past the canvas
+        /// edge, and sized to its measured text.
         /// </summary>
-        /// <returns>The tooltip bounds in picture box client coordinates, or an
+        /// <returns>The tooltip bounds in canvas client coordinates, or an
         /// empty rectangle when no tooltip is showing.</returns>
         private Rectangle GetBlendTooltipBounds()
         {
@@ -733,11 +931,11 @@ namespace PaintTranslator
             // cursor keeps the box inside the control near the right and bottom edges.
             int x = blendTooltipAnchor.X + 16;
             int y = blendTooltipAnchor.Y + 20;
-            if (x + width > imagePictureBox.ClientSize.Width)
+            if (x + width > imageCanvas.ClientSize.Width)
             {
                 x = blendTooltipAnchor.X - width - 8;
             }
-            if (y + height > imagePictureBox.ClientSize.Height)
+            if (y + height > imageCanvas.ClientSize.Height)
             {
                 y = blendTooltipAnchor.Y - height - 8;
             }
@@ -789,8 +987,8 @@ namespace PaintTranslator
             // Whatever blend the tooltip showed belonged to the old image's pixels.
             HideBlendTooltip();
 
-            Image previous = imagePictureBox.Image;
-            imagePictureBox.Image = image;
+            Image previous = imageCanvas.Image;
+            imageCanvas.Image = image;
             previous?.Dispose();
         }
     }

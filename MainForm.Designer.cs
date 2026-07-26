@@ -36,7 +36,8 @@ namespace PaintTranslator
             this.rowsLabel = new System.Windows.Forms.Label();
             this.rowsNumericUpDown = new System.Windows.Forms.NumericUpDown();
             this.showGridCheckBox = new System.Windows.Forms.CheckBox();
-            this.imagePictureBox = new System.Windows.Forms.PictureBox();
+            this.magnifierCheckBox = new System.Windows.Forms.CheckBox();
+            this.imageCanvas = new PaintTranslator.Controls.ImageCanvas();
             this.palettePanel = new System.Windows.Forms.Panel();
             this.selectAllCheckBox = new System.Windows.Forms.CheckBox();
             this.paintsCheckedListBox = new PaintTranslator.Controls.PaintCheckedListBox();
@@ -47,7 +48,6 @@ namespace PaintTranslator
             this.palettePanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.columnsNumericUpDown)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.rowsNumericUpDown)).BeginInit();
-            ((System.ComponentModel.ISupportInitialize)(this.imagePictureBox)).BeginInit();
             this.SuspendLayout();
             //
             // toolbarPanel
@@ -59,6 +59,7 @@ namespace PaintTranslator
             this.toolbarPanel.Controls.Add(this.rowsLabel);
             this.toolbarPanel.Controls.Add(this.rowsNumericUpDown);
             this.toolbarPanel.Controls.Add(this.showGridCheckBox);
+            this.toolbarPanel.Controls.Add(this.magnifierCheckBox);
             this.toolbarPanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.toolbarPanel.Location = new System.Drawing.Point(0, 0);
             this.toolbarPanel.Name = "toolbarPanel";
@@ -136,20 +137,34 @@ namespace PaintTranslator
             this.showGridCheckBox.UseVisualStyleBackColor = true;
             this.showGridCheckBox.CheckedChanged += new System.EventHandler(this.GridSettingsChanged);
             //
-            // imagePictureBox
+            // magnifierCheckBox
             //
-            this.imagePictureBox.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(30)))), ((int)(((byte)(30)))), ((int)(((byte)(30)))));
-            this.imagePictureBox.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.imagePictureBox.Location = new System.Drawing.Point(0, 54);
-            this.imagePictureBox.Name = "imagePictureBox";
-            this.imagePictureBox.Size = new System.Drawing.Size(984, 607);
-            this.imagePictureBox.SizeMode = System.Windows.Forms.PictureBoxSizeMode.Zoom;
-            this.imagePictureBox.TabIndex = 8;
-            this.imagePictureBox.TabStop = false;
-            this.imagePictureBox.Paint += new System.Windows.Forms.PaintEventHandler(this.ImagePictureBox_Paint);
-            this.imagePictureBox.MouseLeave += new System.EventHandler(this.ImagePictureBox_MouseLeave);
-            this.imagePictureBox.MouseMove += new System.Windows.Forms.MouseEventHandler(this.ImagePictureBox_MouseMove);
-            this.imagePictureBox.Resize += new System.EventHandler(this.ImagePictureBox_Resize);
+            this.magnifierCheckBox.Appearance = System.Windows.Forms.Appearance.Button;
+            this.magnifierCheckBox.Location = new System.Drawing.Point(672, 12);
+            this.magnifierCheckBox.Name = "magnifierCheckBox";
+            this.magnifierCheckBox.Size = new System.Drawing.Size(100, 30);
+            this.magnifierCheckBox.TabIndex = 8;
+            this.magnifierCheckBox.Text = "🔍 Zoom";
+            this.magnifierCheckBox.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
+            this.magnifierCheckBox.UseVisualStyleBackColor = true;
+            this.magnifierCheckBox.CheckedChanged += new System.EventHandler(this.MagnifierCheckBox_CheckedChanged);
+            //
+            // imageCanvas
+            //
+            this.imageCanvas.AllowDrop = true;
+            this.imageCanvas.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(30)))), ((int)(((byte)(30)))), ((int)(((byte)(30)))));
+            this.imageCanvas.Dock = System.Windows.Forms.DockStyle.Fill;
+            this.imageCanvas.Location = new System.Drawing.Point(0, 54);
+            this.imageCanvas.Name = "imageCanvas";
+            this.imageCanvas.Size = new System.Drawing.Size(984, 607);
+            this.imageCanvas.TabIndex = 8;
+            this.imageCanvas.TabStop = false;
+            this.imageCanvas.DragDrop += new System.Windows.Forms.DragEventHandler(this.ImageDragDrop);
+            this.imageCanvas.DragEnter += new System.Windows.Forms.DragEventHandler(this.ImageDragEnter);
+            this.imageCanvas.Paint += new System.Windows.Forms.PaintEventHandler(this.ImageCanvas_Paint);
+            this.imageCanvas.MouseLeave += new System.EventHandler(this.ImageCanvas_MouseLeave);
+            this.imageCanvas.MouseMove += new System.Windows.Forms.MouseEventHandler(this.ImageCanvas_MouseMove);
+            this.imageCanvas.ViewChanged += new System.EventHandler(this.ImageCanvas_ViewChanged);
             //
             // palettePanel
             //
@@ -224,22 +239,24 @@ namespace PaintTranslator
             //
             // MainForm
             //
+            this.AllowDrop = true;
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.ClientSize = new System.Drawing.Size(984, 661);
-            this.Controls.Add(this.imagePictureBox);
+            this.Controls.Add(this.imageCanvas);
             this.Controls.Add(this.palettePanel);
             this.Controls.Add(this.toolbarPanel);
             this.MinimumSize = new System.Drawing.Size(720, 480);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "Paint Translator";
+            this.DragDrop += new System.Windows.Forms.DragEventHandler(this.ImageDragDrop);
+            this.DragEnter += new System.Windows.Forms.DragEventHandler(this.ImageDragEnter);
             this.toolbarPanel.ResumeLayout(false);
             this.toolbarPanel.PerformLayout();
             this.palettePanel.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.columnsNumericUpDown)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.rowsNumericUpDown)).EndInit();
-            ((System.ComponentModel.ISupportInitialize)(this.imagePictureBox)).EndInit();
             this.ResumeLayout(false);
         }
 
@@ -253,7 +270,8 @@ namespace PaintTranslator
         private System.Windows.Forms.Label rowsLabel;
         private System.Windows.Forms.NumericUpDown rowsNumericUpDown;
         private System.Windows.Forms.CheckBox showGridCheckBox;
-        private System.Windows.Forms.PictureBox imagePictureBox;
+        private System.Windows.Forms.CheckBox magnifierCheckBox;
+        private PaintTranslator.Controls.ImageCanvas imageCanvas;
         private System.Windows.Forms.Panel palettePanel;
         private System.Windows.Forms.CheckBox selectAllCheckBox;
         private System.Windows.Forms.Button editPaletteButton;

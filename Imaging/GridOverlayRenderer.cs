@@ -4,8 +4,7 @@ using System.Drawing;
 namespace PaintTranslator.Imaging
 {
     /// <summary>
-    /// Draws a configurable grid overlay on top of a displayed image, and computes
-    /// where a zoomed image actually renders inside its containing control.
+    /// Draws a configurable grid overlay on top of a displayed image.
     /// </summary>
     public static class GridOverlayRenderer
     {
@@ -65,36 +64,6 @@ namespace PaintTranslator.Imaging
             }
 
             graphics.DrawRectangle(pen, bounds.X, bounds.Y, bounds.Width, bounds.Height);
-        }
-
-        /// <summary>
-        /// Computes the rectangle an image occupies inside a container when scaled to
-        /// fit while preserving aspect ratio and centered, matching the behavior of
-        /// <see cref="System.Windows.Forms.PictureBoxSizeMode"/>.Zoom.
-        /// </summary>
-        /// <param name="containerSize">The client size of the containing control.</param>
-        /// <param name="imageSize">The pixel dimensions of the image being displayed.</param>
-        /// <returns>The displayed image bounds, or an empty rectangle if either size has a zero dimension.</returns>
-        public static RectangleF GetZoomedImageBounds(Size containerSize, Size imageSize)
-        {
-            if (containerSize.Width <= 0 || containerSize.Height <= 0 ||
-                imageSize.Width <= 0 || imageSize.Height <= 0)
-            {
-                return RectangleF.Empty;
-            }
-
-            // Zoom mode scales by the tighter of the two axes so the whole image fits,
-            // then centers the result along the slack axis.
-            float scale = Math.Min(
-                (float)containerSize.Width / imageSize.Width,
-                (float)containerSize.Height / imageSize.Height);
-
-            float width = imageSize.Width * scale;
-            float height = imageSize.Height * scale;
-            float left = (containerSize.Width - width) / 2f;
-            float top = (containerSize.Height - height) / 2f;
-
-            return new RectangleF(left, top, width, height);
         }
     }
 }

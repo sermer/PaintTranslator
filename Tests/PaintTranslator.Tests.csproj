@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net5.0-windows</TargetFramework>
+    <!-- The project under test is a WinForms app, so its types need the desktop
+         framework reference to resolve here too. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>PaintTranslator.Tests</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned to the last releases that still target net5.0; the current ones resolve
+         against .NET Framework here and leave the run with no test adapter. -->
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.6.3" />
+    <PackageReference Include="xunit" Version="2.4.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\PaintTranslator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- HEIC is the one format the tests cannot generate: the Windows build of
+         ImageMagick ships an HEVC decoder but no encoder. -->
+    <None Update="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
