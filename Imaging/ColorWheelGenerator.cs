@@ -78,17 +78,17 @@ namespace PaintTranslator.Imaging
             }
 
             // Every pixel's mixture gives each paint at least the same base share,
-            // so the strength-weighted sums over all the paints are precomputed
+            // so the scattering-weighted sums over all the paints are precomputed
             // here and each pixel only adds its two flanking paints' surplus.
             int bands = SubtractivePaintMixer.BandCount;
-            var strengthKsSum = new double[bands];
-            double strengthSum = 0.0;
+            var scatteringKsSum = new double[bands];
+            double scatteringSum = 0.0;
             for (int i = 0; i < count; i++)
             {
-                strengthSum += spectra[i].Strength;
+                scatteringSum += spectra[i].RelativeScattering;
                 for (int band = 0; band < bands; band++)
                 {
-                    strengthKsSum[band] += spectra[i].Strength * spectra[i].Ks[band];
+                    scatteringKsSum[band] += spectra[i].RelativeScattering * spectra[i].Ks[band];
                 }
             }
 
@@ -153,20 +153,22 @@ namespace PaintTranslator.Imaging
                         double weightLower = baseShare + rimShare * (1.0 - blend);
                         double weightUpper = baseShare + rimShare * blend;
 
-                        // Kubelka-Munk concentrations are squared-weight times
-                        // strength, so the pixel's K/S average is the precomputed
+                        // A Kubelka-Munk concentration is a paint's share times its
+                        // scattering, so the pixel's K/S average is the precomputed
                         // all-paints sum at the base share plus each flanking paint's
-                        // surplus over that base.
-                        double baseConcentration = baseShare * baseShare;
-                        double extraLower = (weightLower * weightLower - baseConcentration) * spectra[lower].Strength;
-                        double extraUpper = (weightUpper * weightUpper - baseConcentration) * spectra[upper].Strength;
-                        double totalConcentration = baseConcentration * strengthSum + extraLower + extraUpper;
+                        // surplus over that base. Shares enter linearly here for the
+                        // same reason they do in SubtractivePaintMixer.Mix, and the two
+                        // have to agree: the wheel is how a user picks a mixture, and
+                        // the recipe for it is computed by the mixer.
+                        double extraLower = (weightLower - baseShare) * spectra[lower].RelativeScattering;
+                        double extraUpper = (weightUpper - baseShare) * spectra[upper].RelativeScattering;
+                        double totalConcentration = baseShare * scatteringSum + extraLower + extraUpper;
 
                         double[] ksLower = spectra[lower].Ks;
                         double[] ksUpper = spectra[upper].Ks;
                         for (int band = 0; band < bands; band++)
                         {
-                            ksMix[band] = (baseConcentration * strengthKsSum[band]
+                            ksMix[band] = (baseShare * scatteringKsSum[band]
                                 + extraLower * ksLower[band]
                                 + extraUpper * ksUpper[band]) / totalConcentration;
                         }

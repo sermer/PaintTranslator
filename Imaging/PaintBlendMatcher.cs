@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using PaintTranslator.Data;
 
 namespace PaintTranslator.Imaging
 {
@@ -20,32 +21,58 @@ namespace PaintTranslator.Imaging
         // fast enough to run lazily on the first mouse hover.
         private const int MaxPaintsForTriples = 30;
 
-        // Interior sample points of the two-paint mixing line, as the share of
-        // the second paint. Endpoints are covered by the single-paint recipes.
-        private static readonly double[] PairRatios =
+        // How much more a lightness difference counts than a chromatic one when
+        // ranking candidates. Measured perceptibility thresholds sit at about 1.04
+        // for lightness against 1.58 for chroma, a ratio near three to two, and a
+        // painting's value structure is what carries its legibility: when no mixture
+        // can reach a target, being the right lightness and the wrong hue reads far
+        // better than the reverse. Note this is the opposite of the industrial
+        // convention, which discounts lightness because it is asking whether a batch
+        // is within tolerance rather than whether an image reads correctly.
+        private const double LightnessWeight = 1.5;
+
+        // Two-paint recipes, in whole parts of each paint. The ladder is geometric
+        // rather than evenly spaced because the visible error from rounding a ratio
+        // scales with the ratio: near even, one part either way is an obvious shift,
+        // while past about 1:8 the same absolute step is barely perceptible. Evenly
+        // spaced eighths therefore waste candidates at the wide end and miss useful
+        // ones near even, and no sampling finer than this survives being scooped out
+        // of a tube by hand. Endpoints are covered by the single-paint recipes.
+        private static readonly int[][] PairParts =
         {
-            1 / 8.0, 2 / 8.0, 3 / 8.0, 4 / 8.0, 5 / 8.0, 6 / 8.0, 7 / 8.0,
+            new[] { 1, 1 },
+            new[] { 3, 2 }, new[] { 2, 3 },
+            new[] { 2, 1 }, new[] { 1, 2 },
+            new[] { 3, 1 }, new[] { 1, 3 },
+            new[] { 5, 1 }, new[] { 1, 5 },
+            new[] { 8, 1 }, new[] { 1, 8 },
+            new[] { 12, 1 }, new[] { 1, 12 },
+            new[] { 20, 1 }, new[] { 1, 20 },
         };
 
-        // Interior sample points of the three-paint mixing triangle: the centroid
-        // plus each vertex-leaning midpoint. Edges are covered by the pair samples.
-        private static readonly double[][] TripleWeights =
+        // Three-paint recipes, in whole parts: equal thirds plus each paint doubled
+        // against the other two. Edges of the mixing triangle are covered by the pair
+        // recipes. Past three paints a mixture keeps barely a quarter of its parents'
+        // chroma, so deeper combinations are not worth sampling.
+        private static readonly int[][] TripleParts =
         {
-            new[] { 1 / 3.0, 1 / 3.0, 1 / 3.0 },
-            new[] { 0.50, 0.25, 0.25 },
-            new[] { 0.25, 0.50, 0.25 },
-            new[] { 0.25, 0.25, 0.50 },
+            new[] { 1, 1, 1 },
+            new[] { 2, 1, 1 },
+            new[] { 1, 2, 1 },
+            new[] { 1, 1, 2 },
         };
 
         // Parallel candidate arrays: each mixture's sRGB value, its CIELAB
-        // coordinates, and the recipe (paint indices with matching weights)
-        // that produced it.
-        private readonly int[] candidateArgb;
-        private readonly double[] candidateL;
-        private readonly double[] candidateA;
-        private readonly double[] candidateB;
-        private readonly int[][] candidatePaints;
-        private readonly double[][] candidateWeights;
+        // coordinates, and the recipe (paint indices with matching parts)
+        // that produced it. Populated once by SampleAchievableMixtures, which every
+        // constructor calls exactly once and nothing else calls, so these are
+        // effectively readonly even though the compiler cannot see it.
+        private int[] candidateArgb;
+        private double[] candidateL;
+        private double[] candidateA;
+        private double[] candidateB;
+        private int[][] candidatePaints;
+        private int[][] candidateParts;
 
         // The most recent query and its result: a hovering cursor samples the
         // same color many times in a row, so one cached entry skips most scans.
@@ -63,13 +90,36 @@ namespace PaintTranslator.Imaging
             /// </summary>
             /// <param name="mixedColor">The color the recipe mixes to.</param>
             /// <param name="paintIndices">The indices of the participating paints in the matcher's paint list.</param>
-            /// <param name="weights">Each participating paint's share of the mix, index-aligned with <paramref name="paintIndices"/>.</param>
-            public BlendMatch(Color mixedColor, IReadOnlyList<int> paintIndices, IReadOnlyList<double> weights)
+            /// <param name="parts">Each participating paint's whole number of parts, index-aligned with <paramref name="paintIndices"/>.</param>
+            public BlendMatch(Color mixedColor, IReadOnlyList<int> paintIndices, IReadOnlyList<int> parts)
             {
                 MixedColor = mixedColor;
                 PaintIndices = paintIndices;
-                Weights = weights;
+                Parts = parts;
+
+                // The mixer works in fractional shares while the user reads whole
+                // parts, so both views are derived from the one source here rather
+                // than tracked separately and risking disagreement.
+                int totalParts = 0;
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    totalParts += parts[i];
+                }
+
+                var shares = new double[parts.Count];
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    shares[i] = (double)parts[i] / totalParts;
+                }
+                Weights = shares;
             }
+
+            /// <summary>
+            /// Gets each participating paint's whole number of parts in the recipe,
+            /// index-aligned with <see cref="PaintIndices"/>. This is the form the
+            /// recipe is reported in, because parts are what a person can measure out.
+            /// </summary>
+            public IReadOnlyList<int> Parts { get; }
 
             /// <summary>
             /// Gets the color the recipe mixes to.
@@ -107,40 +157,82 @@ namespace PaintTranslator.Imaging
                 throw new ArgumentException("At least one paint is required.", nameof(paintColors));
             }
 
-            int count = paintColors.Count;
-
             // Convert each paint to its mixing spectrum once; every sampled
             // mixture below reuses these.
-            var spectra = new PaintSpectrum[count];
-            for (int i = 0; i < count; i++)
+            var spectra = new PaintSpectrum[paintColors.Count];
+            for (int i = 0; i < paintColors.Count; i++)
             {
                 spectra[i] = SubtractivePaintMixer.ToSpectrum(paintColors[i]);
             }
 
+            SampleAchievableMixtures(
+                paintColors.Count,
+                (indices, parts) => MixSpectraByParts(spectra, indices, parts));
+        }
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="PaintBlendMatcher"/> class from
+        /// paints with spectrophotometer measurements, sampling the gamut of mixtures
+        /// achievable with them.
+        /// <para>
+        /// Recipes found this way are worth more than recipes over the same paints
+        /// described only by colour, because the sampled mixtures are where the paint
+        /// actually lands. The reconstructed path has to guess how much each paint
+        /// scatters and lets titanium white dominate as a result, so it proposes tints
+        /// that do not come out that way on the palette.
+        /// </para>
+        /// </summary>
+        /// <param name="paints">The available measured paints.</param>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="paints"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
+        public PaintBlendMatcher(IReadOnlyList<MeasuredPaint> paints)
+        {
+            if (paints == null)
+            {
+                throw new ArgumentNullException(nameof(paints));
+            }
+            if (paints.Count == 0)
+            {
+                throw new ArgumentException("At least one paint is required.", nameof(paints));
+            }
+
+            SampleAchievableMixtures(
+                paints.Count,
+                (indices, parts) => MixMeasuredByParts(paints, indices, parts));
+        }
+
+        /// <summary>
+        /// Builds the candidate set of achievable mixtures: each paint alone, every pair
+        /// at each ratio on the ladder, and every triple at a few interior weightings.
+        /// </summary>
+        /// <param name="count">The number of available paints.</param>
+        /// <param name="mixRecipe">Mixes the paints at the given indices in the given whole parts.</param>
+        private void SampleAchievableMixtures(int count, Func<int[], int[], Color> mixRecipe)
+        {
             var seen = new HashSet<int>();
             var argbs = new List<int>();
             var recipePaints = new List<int[]>();
-            var recipeWeights = new List<double[]>();
+            var recipeParts = new List<int[]>();
 
             // Each paint straight from the tube. Singles are added first so that
             // when several recipes collapse to the same color, the simplest
             // recipe is the one that survives deduplication.
             for (int i = 0; i < count; i++)
             {
-                AddCandidate(paintColors[i], new[] { i }, new[] { 1.0 }, seen, argbs, recipePaints, recipeWeights);
+                var single = new[] { i };
+                var whole = new[] { 1 };
+                AddCandidate(mixRecipe(single, whole), single, whole, seen, argbs, recipePaints, recipeParts);
             }
 
-            // Every unordered pair, sampled along its mixing line.
+            // Every unordered pair, at each ratio on the ladder.
             for (int i = 0; i < count; i++)
             {
                 for (int j = i + 1; j < count; j++)
                 {
-                    foreach (double w in PairRatios)
+                    var pair = new[] { i, j };
+                    foreach (int[] parts in PairParts)
                     {
-                        Color mixed = SubtractivePaintMixer.Mix(
-                            new[] { spectra[i], spectra[j] },
-                            new[] { 1.0 - w, w });
-                        AddCandidate(mixed, new[] { i, j }, new[] { 1.0 - w, w }, seen, argbs, recipePaints, recipeWeights);
+                        AddCandidate(mixRecipe(pair, parts), pair, parts, seen, argbs, recipePaints, recipeParts);
                     }
                 }
             }
@@ -156,11 +248,10 @@ namespace PaintTranslator.Imaging
                     {
                         for (int k = j + 1; k < count; k++)
                         {
-                            foreach (double[] w in TripleWeights)
+                            var triple = new[] { i, j, k };
+                            foreach (int[] parts in TripleParts)
                             {
-                                Color mixed = SubtractivePaintMixer.Mix(
-                                    new[] { spectra[i], spectra[j], spectra[k] }, w);
-                                AddCandidate(mixed, new[] { i, j, k }, (double[])w.Clone(), seen, argbs, recipePaints, recipeWeights);
+                                AddCandidate(mixRecipe(triple, parts), triple, parts, seen, argbs, recipePaints, recipeParts);
                             }
                         }
                     }
@@ -171,7 +262,7 @@ namespace PaintTranslator.Imaging
             // pure arithmetic over flat arrays.
             candidateArgb = argbs.ToArray();
             candidatePaints = recipePaints.ToArray();
-            candidateWeights = recipeWeights.ToArray();
+            candidateParts = recipeParts.ToArray();
             candidateL = new double[candidateArgb.Length];
             candidateA = new double[candidateArgb.Length];
             candidateB = new double[candidateArgb.Length];
@@ -185,8 +276,28 @@ namespace PaintTranslator.Imaging
         }
 
         /// <summary>
-        /// Finds the sampled mixture perceptually nearest (squared CIELAB distance)
-        /// to the given color.
+        /// Measures the perceived difference between two CIELAB colors.
+        /// </summary>
+        /// <param name="firstL">The first color's lightness.</param>
+        /// <param name="firstA">The first color's green-red coordinate.</param>
+        /// <param name="firstB">The first color's blue-yellow coordinate.</param>
+        /// <param name="secondL">The second color's lightness.</param>
+        /// <param name="secondA">The second color's green-red coordinate.</param>
+        /// <param name="secondB">The second color's blue-yellow coordinate.</param>
+        /// <returns>The weighted distance between the two colors.</returns>
+        public static double PerceptualDistance(
+            double firstL, double firstA, double firstB,
+            double secondL, double secondA, double secondB)
+        {
+            double lightnessDifference = Math.Abs(firstL - secondL);
+            double da = firstA - secondA;
+            double db = firstB - secondB;
+
+            return (LightnessWeight * lightnessDifference) + Math.Sqrt((da * da) + (db * db));
+        }
+
+        /// <summary>
+        /// Finds the sampled mixture perceptually nearest to the given color.
         /// </summary>
         /// <param name="target">The color to approximate with a paint mixture.</param>
         /// <returns>The closest mixture and its recipe.</returns>
@@ -207,10 +318,9 @@ namespace PaintTranslator.Imaging
             int bestIndex = 0;
             for (int i = 0; i < candidateL.Length; i++)
             {
-                double dl = candidateL[i] - targetL;
-                double da = candidateA[i] - targetA;
-                double db = candidateB[i] - targetB;
-                double distance = dl * dl + da * da + db * db;
+                double distance = PerceptualDistance(
+                    candidateL[i], candidateA[i], candidateB[i],
+                    targetL, targetA, targetB);
                 if (distance < bestDistance)
                 {
                     bestDistance = distance;
@@ -222,8 +332,62 @@ namespace PaintTranslator.Imaging
             lastMatch = new BlendMatch(
                 Color.FromArgb(candidateArgb[bestIndex]),
                 candidatePaints[bestIndex],
-                candidateWeights[bestIndex]);
+                candidateParts[bestIndex]);
             return lastMatch;
+        }
+
+        /// <summary>
+        /// Mixes reconstructed-spectrum paints in the given whole-part proportions.
+        /// </summary>
+        /// <param name="spectra">The spectra of all available paints.</param>
+        /// <param name="paintIndices">The indices of the participating paints.</param>
+        /// <param name="parts">Each participating paint's whole number of parts.</param>
+        /// <returns>The mixed color.</returns>
+        private static Color MixSpectraByParts(PaintSpectrum[] spectra, int[] paintIndices, int[] parts)
+        {
+            var participating = new PaintSpectrum[paintIndices.Length];
+            for (int i = 0; i < paintIndices.Length; i++)
+            {
+                participating[i] = spectra[paintIndices[i]];
+            }
+
+            return SubtractivePaintMixer.Mix(participating, ToShares(parts));
+        }
+
+        /// <summary>
+        /// Mixes measured paints in the given whole-part proportions.
+        /// </summary>
+        /// <param name="paints">All available measured paints.</param>
+        /// <param name="paintIndices">The indices of the participating paints.</param>
+        /// <param name="parts">Each participating paint's whole number of parts.</param>
+        /// <returns>The mixed color.</returns>
+        private static Color MixMeasuredByParts(
+            IReadOnlyList<MeasuredPaint> paints, int[] paintIndices, int[] parts)
+        {
+            var participating = new MeasuredPaint[paintIndices.Length];
+            for (int i = 0; i < paintIndices.Length; i++)
+            {
+                participating[i] = paints[paintIndices[i]];
+            }
+
+            return MeasuredPaintMixer.Mix(participating, ToShares(parts));
+        }
+
+        /// <summary>
+        /// Converts whole parts to the fractional shares the mixers take. Both mixers
+        /// normalise the shares themselves, so raw part counts pass through unchanged.
+        /// </summary>
+        /// <param name="parts">Each paint's whole number of parts.</param>
+        /// <returns>The parts as mixing shares.</returns>
+        private static double[] ToShares(int[] parts)
+        {
+            var shares = new double[parts.Length];
+            for (int i = 0; i < parts.Length; i++)
+            {
+                shares[i] = parts[i];
+            }
+
+            return shares;
         }
 
         /// <summary>
@@ -232,20 +396,20 @@ namespace PaintTranslator.Imaging
         /// </summary>
         /// <param name="color">The mixture color to record.</param>
         /// <param name="paints">The indices of the paints in the recipe.</param>
-        /// <param name="weights">Each recipe paint's share of the mix.</param>
+        /// <param name="parts">Each recipe paint's whole number of parts.</param>
         /// <param name="seen">The set of ARGB values already recorded.</param>
         /// <param name="argbs">The list of recorded candidate ARGB values.</param>
         /// <param name="recipePaints">The list of recorded recipe paint indices.</param>
-        /// <param name="recipeWeights">The list of recorded recipe weights.</param>
-        private static void AddCandidate(Color color, int[] paints, double[] weights,
-            HashSet<int> seen, List<int> argbs, List<int[]> recipePaints, List<double[]> recipeWeights)
+        /// <param name="recipeParts">The list of recorded recipe parts.</param>
+        private static void AddCandidate(Color color, int[] paints, int[] parts,
+            HashSet<int> seen, List<int> argbs, List<int[]> recipePaints, List<int[]> recipeParts)
         {
             int argb = color.ToArgb();
             if (seen.Add(argb))
             {
                 argbs.Add(argb);
                 recipePaints.Add(paints);
-                recipeWeights.Add(weights);
+                recipeParts.Add(parts);
             }
         }
     }

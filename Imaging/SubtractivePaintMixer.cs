@@ -6,52 +6,83 @@ namespace PaintTranslator.Imaging
 {
     /// <summary>
     /// A paint color prepared for Kubelka-Munk mixing: its absorption-to-scattering
-    /// ratio in each wavelength band, plus the luminance-derived strength that scales
-    /// how hard the paint pulls on a mixture. Instances are opaque handles produced by
-    /// <see cref="SubtractivePaintMixer.ToSpectrum"/> and consumed by the mixer's
-    /// weighted-mix overloads; converting each paint once and reusing the spectrum
-    /// keeps repeated mixing cheap.
+    /// ratio in each wavelength band, plus a relative scattering coefficient that
+    /// scales how hard the paint pulls on a mixture. Instances are opaque handles
+    /// produced by <see cref="SubtractivePaintMixer.ToSpectrum"/> and consumed by the
+    /// mixer's weighted-mix overloads; converting each paint once and reusing the
+    /// spectrum keeps repeated mixing cheap.
     /// </summary>
     public sealed class PaintSpectrum
     {
         // Kubelka-Munk K/S (absorption/scattering) values, one per wavelength band.
         internal readonly double[] Ks;
 
-        // Luminance of the paint's reflectance spectrum; concentrations are scaled
-        // by this so light, weakly-tinting paints are not overwhelmed by dark ones.
-        internal readonly double Strength;
+        // Stand-in for the paint's Kubelka-Munk scattering coefficient S, taken as the
+        // luminance of its reflectance spectrum. Substituting it into the mixing rule
+        // below yields the two-constant form, sum(c*K) / sum(c*S), with S held flat
+        // across wavelengths. It is deliberately not the tinting strength an artist
+        // would recognise: phthalo blue outweighs ultramarine roughly 2.4 to 1 by tube
+        // volume, while their luminances differ by well under a factor of two, so
+        // luminance cannot express tinting strength and does not attempt to. Real
+        // per-pigment K and S values are what would replace this.
+        internal readonly double RelativeScattering;
 
         /// <summary>
         /// Initializes a new instance of the <see cref="PaintSpectrum"/> class.
         /// </summary>
         /// <param name="ks">The Kubelka-Munk K/S value for each wavelength band.</param>
-        /// <param name="strength">The luminance-derived tinting-strength weight.</param>
-        internal PaintSpectrum(double[] ks, double strength)
+        /// <param name="relativeScattering">The paint's relative scattering coefficient.</param>
+        internal PaintSpectrum(double[] ks, double relativeScattering)
         {
             Ks = ks;
-            Strength = strength;
+            RelativeScattering = relativeScattering;
         }
     }
 
     /// <summary>
     /// Approximates subtractive (pigment) color mixing with Kubelka-Munk theory over
-    /// reconstructed reflectance spectra. Each sRGB color is expanded to a 38-band
-    /// reflectance spectrum (wavelengths 380-730nm), spectra are combined through the
-    /// Kubelka-Munk absorption/scattering model with luminance-weighted concentrations,
-    /// and the mixed spectrum is integrated back to sRGB through the CIE standard
-    /// observer under D65 light. Working per wavelength instead of per RGB channel is
-    /// what makes yellow and blue mix toward green the way physical paints do: a blue
-    /// paint's spectrum still reflects some green light even when its sRGB green
-    /// channel is nearly zero, and that shared reflectance is all that survives the mix.
+    /// reconstructed reflectance spectra. Each sRGB color is expanded to a reflectance
+    /// spectrum spanning <see cref="StartWavelengthNm"/> to <see cref="EndWavelengthNm"/>,
+    /// spectra are combined through the Kubelka-Munk absorption/scattering model with
+    /// scattering-weighted concentrations, and the mixed spectrum is integrated back to
+    /// sRGB through the CIE standard observer under D65 light. Working per wavelength
+    /// instead of per RGB channel is what makes yellow and blue mix toward green the way
+    /// physical paints do: a blue paint's spectrum still reflects some green light even
+    /// when its sRGB green channel is nearly zero, and that shared reflectance is all
+    /// that survives the mix.
+    /// <para>
     /// Spectral data and mixing model are ported from spectral.js v3
     /// (https://github.com/rvanwijnen/spectral.js, MIT License, Ronald van Wijnen).
+    /// The port is faithful to that library's arithmetic apart from two deliberate
+    /// departures: mixing weights are used as concentrations rather than squared, and
+    /// out-of-gamut mixtures are clamped where spectral.js maps them through OKLCh.
+    /// </para>
     /// </summary>
     public static class SubtractivePaintMixer
     {
         /// <summary>
-        /// The number of wavelength bands in a reflectance spectrum (380-730nm in 10nm steps).
+        /// The wavelength in nanometres of the first band of a reflectance spectrum.
+        /// </summary>
+        public const int StartWavelengthNm = 380;
+
+        /// <summary>
+        /// The spacing in nanometres between consecutive bands of a reflectance spectrum.
+        /// </summary>
+        public const int WavelengthIntervalNm = 10;
+
+        /// <summary>
+        /// The number of wavelength bands in a reflectance spectrum.
         /// </summary>
         public const int BandCount = 38;
+
+        /// <summary>
+        /// The wavelength in nanometres of the last band of a reflectance spectrum.
+        /// Stated explicitly because the range is easy to misread: 38 bands at 10nm
+        /// steps from 380nm reach 750nm, not the 730nm that published pigment
+        /// measurements commonly stop at. Reflectance data sourced elsewhere is usually
+        /// 380-730nm over 36 bands and has to be resampled before it can be used here.
+        /// </summary>
+        public const int EndWavelengthNm = StartWavelengthNm + ((BandCount - 1) * WavelengthIntervalNm);
 
         // Floor keeping reflectance positive so K/S stays finite for channels a
         // color does not reflect at all; real paints always reflect a little light.
@@ -96,14 +127,17 @@ namespace PaintTranslator.Imaging
                 throw new ArgumentException("Each paint needs exactly one mixing weight.", nameof(weights));
             }
 
-            // Each paint's effective concentration is its squared share scaled by
-            // its tinting strength; K/S values then average linearly under those
-            // concentrations, which is the Kubelka-Munk mixing rule.
+            // Each paint's effective concentration is its share scaled by how strongly
+            // the paint scatters; K/S values then average linearly under those
+            // concentrations, which is the Kubelka-Munk mixing rule. The share is used
+            // as given rather than squared: squaring is a gradient-easing trick from
+            // spectral.js that leaves 50/50 mixes untouched but turns a requested 1:3
+            // into 1:9, and the ratios this app reports have to mean what they say.
             var ksMix = new double[BandCount];
             double totalConcentration = 0.0;
             for (int i = 0; i < paints.Count; i++)
             {
-                double concentration = weights[i] * weights[i] * paints[i].Strength;
+                double concentration = weights[i] * paints[i].RelativeScattering;
                 if (concentration <= 0.0)
                 {
                     continue;

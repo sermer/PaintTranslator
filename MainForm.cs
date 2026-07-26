@@ -824,15 +824,61 @@ namespace PaintTranslator
 
             PaintBlendMatcher.BlendMatch match = blendMatcher.FindClosestBlend(pixel);
 
-            // Spread the recipe back over the full paint list so the shared line
-            // builder can treat wheel and photo blends identically.
-            var weights = new double[paints.Count];
+            return ComposeRecipeLines(pixel, paints, match);
+        }
+
+        /// <summary>
+        /// Composes the tooltip text for a mixable recipe: the pixel's RGB, each paint
+        /// with its whole number of parts, and how close the mixture actually lands.
+        /// <para>
+        /// Parts rather than percentages, because a recipe is executed by scooping paint
+        /// onto a palette and nobody can measure 63%; the ratios the matcher searches
+        /// are already restricted to ones a hand can manage. The closeness lines matter
+        /// because a limited palette often cannot reach a photo's color at all, and
+        /// silently returning the nearest thing would leave the user believing the mix
+        /// is exact. Saying which way it misses turns that limitation into something
+        /// they can correct for by eye.
+        /// </para>
+        /// </summary>
+        /// <param name="pixel">The hovered pixel color.</param>
+        /// <param name="paints">The paints the recipe's indices refer to.</param>
+        /// <param name="match">The closest mixture and its recipe.</param>
+        /// <returns>The tooltip lines.</returns>
+        private static string[] ComposeRecipeLines(
+            Color pixel, List<GoldenPaint> paints, PaintBlendMatcher.BlendMatch match)
+        {
+            var lines = new List<string> { FormatRgbLine(pixel), "Closest mix:" };
+
+            // Largest share first, so the paint the user reaches for first is listed first.
+            var order = new List<int>(match.PaintIndices.Count);
             for (int i = 0; i < match.PaintIndices.Count; i++)
             {
-                weights[match.PaintIndices[i]] = match.Weights[i];
+                order.Add(i);
+            }
+            order.Sort((first, second) => match.Parts[second].CompareTo(match.Parts[first]));
+
+            foreach (int i in order)
+            {
+                int parts = match.Parts[i];
+                string unit = parts == 1 ? "part" : "parts";
+                lines.Add($"{parts} {unit} {paints[match.PaintIndices[i]].Name}");
             }
 
-            return ComposeBlendLines(pixel, paints, weights, "Closest mix:");
+            PalettePhotoConverter.RgbToLab(pixel.R, pixel.G, pixel.B,
+                out double targetL, out double targetA, out double targetB);
+            PalettePhotoConverter.RgbToLab(match.MixedColor.R, match.MixedColor.G, match.MixedColor.B,
+                out double mixL, out double mixA, out double mixB);
+
+            double deltaE = ColorDifference.CieDe2000(targetL, targetA, targetB, mixL, mixA, mixB);
+            lines.Add($"Match: {ColorDifference.DescribeQuality(deltaE)} (dE {deltaE:0.0})");
+
+            string shift = ColorDifference.DescribeShift(targetL, targetA, targetB, mixL, mixA, mixB);
+            if (shift != null)
+            {
+                lines.Add($"Mix reads {shift}");
+            }
+
+            return lines.ToArray();
         }
 
         /// <summary>
@@ -846,10 +892,17 @@ namespace PaintTranslator
         }
 
         /// <summary>
-        /// Composes the tooltip text: the pixel's RGB line, an optional header, and
-        /// the blend's paints with their percentage shares, largest first. Only the
-        /// top five paints get their own line; smaller contributors are rolled into
-        /// a single "+N more" line so wheels built from many paints stay readable.
+        /// Composes the tooltip text for a color wheel pixel: the pixel's RGB line, an
+        /// optional header, and the blend's paints with their percentage shares, largest
+        /// first. Only the top five paints get their own line; smaller contributors are
+        /// rolled into a single "+N more" line so wheels built from many paints stay
+        /// readable.
+        /// <para>
+        /// Percentages are right here and wrong for a recipe. A wheel pixel is a point in
+        /// a continuous field that can draw on every paint at once, so it describes where
+        /// the user is looking rather than something they could mix; see
+        /// <see cref="ComposeRecipeLines"/> for the mixable case.
+        /// </para>
         /// </summary>
         /// <param name="pixel">The hovered pixel color.</param>
         /// <param name="paints">The paints the weights refer to, index-aligned.</param>

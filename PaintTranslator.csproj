@@ -16,6 +16,23 @@
   <ItemGroup>
     <!-- Decodes the formats GDI+ has no support for: WEBP, AVIF, HEIC/HEIF and PSD. -->
     <PackageReference Include="Magick.NET-Q8-x64" Version="14.15.0" />
+    <!-- Unicolour (MIT) is here for its Datasets package, which carries Roy Berns'
+         spectrophotometer measurements of 19 Golden Heavy Body acrylics as
+         two-constant Kubelka-Munk absorption and scattering coefficients. Measured
+         per-pigment scattering is what the mixer needs to stop titanium white
+         overwhelming every mixture, and it is not data that can be derived from a
+         paint's colour. Both packages target netstandard2.0 with no dependencies. -->
+    <PackageReference Include="Wacton.Unicolour" Version="8.0.0" />
+    <PackageReference Include="Wacton.Unicolour.Datasets" Version="5.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The test project asserts on CIELAB coordinates, and the conversion lives as an
+         internal helper on PalettePhotoConverter. Exposing it to the tests keeps them
+         measuring the same conversion the matcher uses instead of a duplicate of it. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>PaintTranslator.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>
