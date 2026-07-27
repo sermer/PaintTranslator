@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using PaintTranslator.Imaging;
+using PaintTranslator.Pigments;
 using Xunit;
 
 namespace PaintTranslator.Tests
@@ -14,14 +16,27 @@ namespace PaintTranslator.Tests
     /// </summary>
     public class PaintBlendMatcherTests
     {
-        private static readonly IReadOnlyList<Color> Paints = new[]
+        // A white, a yellow, a red, a blue and a black: enough spread that the probe
+        // colours below land on single-paint, two-paint and three-paint recipes, and
+        // small enough that an exhaustive subset search over 200 probes stays quick.
+        private static readonly IReadOnlyList<PigmentCoefficients> Paints = new[]
         {
-            Color.FromArgb(255, 247, 255),
-            Color.FromArgb(255, 200, 0),
-            Color.FromArgb(187, 0, 0),
-            Color.FromArgb(50, 47, 75),
-            Color.FromArgb(30, 29, 31),
+            Paint("Titanium White"),
+            Paint("Diarylide Yellow"),
+            Paint("C.P. Cadmium Red Light"),
+            Paint("Ultramarine Blue"),
+            Paint("Bone Black"),
         };
+
+        /// <summary>
+        /// Looks a paint up by name.
+        /// </summary>
+        /// <param name="name">The paint's name.</param>
+        /// <returns>The paint.</returns>
+        private static PigmentCoefficients Paint(string name)
+        {
+            return PigmentLibrary.All.Single(paint => paint.Name == name);
+        }
 
         /// <summary>
         /// Confirms a pure lightness difference is scaled up by half again. Lightness

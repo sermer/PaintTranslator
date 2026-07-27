@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
-using PaintTranslator.Data;
+using PaintTranslator.Pigments;
 
 namespace PaintTranslator.BlendTests
 {
@@ -19,7 +19,7 @@ namespace PaintTranslator.BlendTests
 
         /// <summary>
         /// The paints whose pair combinations are rendered. Edit this list to test
-        /// different blends; names must match <see cref="GoldenPalette"/> entries.
+        /// different blends; names must match <see cref="PigmentLibrary"/> entries.
         /// </summary>
         private static readonly string[] TestPaintNames =
         {
@@ -51,7 +51,7 @@ namespace PaintTranslator.BlendTests
         /// </summary>
         private void PopulateStrips()
         {
-            List<GoldenPaint> paints = ResolveTestPaints();
+            List<PigmentCoefficients> paints = ResolveTestPaints();
 
             // The strip count and images depend on the paint list at runtime, so
             // these picture boxes can't live in the Designer file.
@@ -85,13 +85,13 @@ namespace PaintTranslator.BlendTests
         /// longer matches a palette entry.
         /// </summary>
         /// <returns>The resolved paints.</returns>
-        private static List<GoldenPaint> ResolveTestPaints()
+        private static List<PigmentCoefficients> ResolveTestPaints()
         {
-            var paints = new List<GoldenPaint>(TestPaintNames.Length);
+            var paints = new List<PigmentCoefficients>(TestPaintNames.Length);
 
             foreach (string name in TestPaintNames)
             {
-                foreach (GoldenPaint paint in GoldenPalette.Paints)
+                foreach (PigmentCoefficients paint in PigmentLibrary.Selectable)
                 {
                     if (paint.Name == name)
                     {

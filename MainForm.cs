@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using PaintTranslator.Data;
+using PaintTranslator.Pigments;
 using PaintTranslator.Imaging;
 using PaintTranslator.Input;
 
@@ -118,7 +119,7 @@ namespace PaintTranslator
             {
                 paintsCheckedListBox.BeginUpdate();
                 paintsCheckedListBox.Items.Clear();
-                foreach (GoldenPaint paint in GoldenPalette.Paints)
+                foreach (PigmentCoefficients paint in PigmentLibrary.Selectable)
                 {
                     if (paletteNames == null || paletteNames.Contains(paint.Name))
                     {
@@ -130,7 +131,7 @@ namespace PaintTranslator
                 // would leave the app with no paints; fall back to the catalog.
                 if (paintsCheckedListBox.Items.Count == 0)
                 {
-                    foreach (GoldenPaint paint in GoldenPalette.Paints)
+                    foreach (PigmentCoefficients paint in PigmentLibrary.Selectable)
                     {
                         paintsCheckedListBox.Items.Add(paint, true);
                     }
@@ -158,7 +159,7 @@ namespace PaintTranslator
             var currentNames = new HashSet<string>(StringComparer.Ordinal);
             foreach (object item in paintsCheckedListBox.Items)
             {
-                if (item is GoldenPaint paint)
+                if (item is PigmentCoefficients paint)
                 {
                     currentNames.Add(paint.Name);
                 }
@@ -191,7 +192,7 @@ namespace PaintTranslator
                 // the rebuilt list.
                 if (wheelDisplayed)
                 {
-                    SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaintColors(null)));
+                    SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
                 }
             }
         }
@@ -408,7 +409,7 @@ namespace PaintTranslator
         /// <param name="e">The event arguments.</param>
         private void GenerateWheelButton_Click(object sender, EventArgs e)
         {
-            SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaintColors(null)));
+            SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
             wheelDisplayed = true;
             Text = "Paint Translator - Color Wheel (generated)";
         }
@@ -429,7 +430,7 @@ namespace PaintTranslator
                 return;
             }
 
-            List<Color> selected = GetSelectedPaintColors(null);
+            List<PigmentCoefficients> selected = GetSelectedPaints(null);
             if (selected.Count == 0)
             {
                 MessageBox.Show(this, "Select at least one paint to convert with.",
@@ -483,7 +484,7 @@ namespace PaintTranslator
             // must be rebuilt from the new selection on next use.
             blendMatcher = null;
 
-            List<Color> selected = GetSelectedPaintColors(e);
+            List<PigmentCoefficients> selected = GetSelectedPaints(e);
 
             // Mirror the list state onto the select-all checkbox without letting
             // its CheckedChanged handler fan back out over every item.
@@ -542,7 +543,7 @@ namespace PaintTranslator
             // already committed here, so no pending change needs merging in.
             if (wheelDisplayed)
             {
-                SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaintColors(null)));
+                SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
             }
         }
 
@@ -553,9 +554,9 @@ namespace PaintTranslator
         /// (ItemCheck fires before the state updates), or null to read the current
         /// states as-is.</param>
         /// <returns>The checked paints.</returns>
-        private List<GoldenPaint> GetSelectedPaints(ItemCheckEventArgs pendingChange)
+        private List<PigmentCoefficients> GetSelectedPaints(ItemCheckEventArgs pendingChange)
         {
-            var paints = new List<GoldenPaint>(paintsCheckedListBox.Items.Count);
+            var paints = new List<PigmentCoefficients>(paintsCheckedListBox.Items.Count);
 
             for (int i = 0; i < paintsCheckedListBox.Items.Count; i++)
             {
@@ -565,32 +566,13 @@ namespace PaintTranslator
                     ? pendingChange.NewValue == CheckState.Checked
                     : paintsCheckedListBox.GetItemChecked(i);
 
-                if (isChecked && paintsCheckedListBox.Items[i] is GoldenPaint paint)
+                if (isChecked && paintsCheckedListBox.Items[i] is PigmentCoefficients paint)
                 {
                     paints.Add(paint);
                 }
             }
 
             return paints;
-        }
-
-        /// <summary>
-        /// Collects the colors of all checked paints, in palette order.
-        /// </summary>
-        /// <param name="pendingChange">A check change that has not been applied yet
-        /// (ItemCheck fires before the state updates), or null to read the current
-        /// states as-is.</param>
-        /// <returns>The mass-tone colors of the checked paints.</returns>
-        private List<Color> GetSelectedPaintColors(ItemCheckEventArgs pendingChange)
-        {
-            List<GoldenPaint> paints = GetSelectedPaints(pendingChange);
-            var colors = new List<Color>(paints.Count);
-            foreach (GoldenPaint paint in paints)
-            {
-                colors.Add(paint.Color);
-            }
-
-            return colors;
         }
 
         /// <summary>
@@ -788,7 +770,7 @@ namespace PaintTranslator
         /// <returns>The tooltip lines, or null when the pixel lies outside the wheel.</returns>
         private string[] BuildWheelBlendLines(Color pixel, int pixelX, int pixelY, int wheelDiameter)
         {
-            List<GoldenPaint> paints = GetSelectedPaints(null);
+            List<PigmentCoefficients> paints = GetSelectedPaints(null);
             double[] weights = ColorWheelGenerator.GetBlendWeights(wheelDiameter, paints.Count, pixelX, pixelY);
             return weights == null ? null : ComposeBlendLines(pixel, paints, weights, null);
         }
@@ -802,7 +784,7 @@ namespace PaintTranslator
         /// <returns>The tooltip lines; only the RGB line when no paints are checked.</returns>
         private string[] BuildClosestMixLines(Color pixel)
         {
-            List<GoldenPaint> paints = GetSelectedPaints(null);
+            List<PigmentCoefficients> paints = GetSelectedPaints(null);
 
             // With nothing checked there is no mix to suggest; still report the RGB.
             if (paints.Count == 0)
@@ -814,12 +796,7 @@ namespace PaintTranslator
             // reused until the paint selection changes.
             if (blendMatcher == null)
             {
-                var colors = new List<Color>(paints.Count);
-                foreach (GoldenPaint paint in paints)
-                {
-                    colors.Add(paint.Color);
-                }
-                blendMatcher = new PaintBlendMatcher(colors);
+                blendMatcher = new PaintBlendMatcher(paints);
             }
 
             PaintBlendMatcher.BlendMatch match = blendMatcher.FindClosestBlend(pixel);
@@ -845,7 +822,7 @@ namespace PaintTranslator
         /// <param name="match">The closest mixture and its recipe.</param>
         /// <returns>The tooltip lines.</returns>
         private static string[] ComposeRecipeLines(
-            Color pixel, List<GoldenPaint> paints, PaintBlendMatcher.BlendMatch match)
+            Color pixel, List<PigmentCoefficients> paints, PaintBlendMatcher.BlendMatch match)
         {
             var lines = new List<string> { FormatRgbLine(pixel), "Closest mix:" };
 
@@ -876,6 +853,23 @@ namespace PaintTranslator
             if (shift != null)
             {
                 lines.Add($"Mix reads {shift}");
+            }
+
+            // Two things the reconstructed pipeline could not report, because it had no
+            // notion of a colour existing outside the screen's gamut and no unrounded
+            // solution to compare its recipe against.
+            if (match.ChromaLost > 0.001)
+            {
+                lines.Add("More vivid than this screen can show");
+            }
+
+            // Deliberately not labelled dE00: these are the matcher's weighted HyAB
+            // distances, which is what the search minimises, not the CIEDE2000 figure
+            // reported on the line above.
+            double roundingCost = match.SnappedDistance - match.ExactDistance;
+            if (roundingCost > 0.5)
+            {
+                lines.Add($"Rounded to whole parts: {match.ExactDistance:0.0} → {match.SnappedDistance:0.0}");
             }
 
             return lines.ToArray();
@@ -910,7 +904,7 @@ namespace PaintTranslator
         /// <param name="header">A line inserted between the RGB line and the paint
         /// lines, or null for none.</param>
         /// <returns>The tooltip lines.</returns>
-        private static string[] ComposeBlendLines(Color pixel, List<GoldenPaint> paints, double[] weights, string header)
+        private static string[] ComposeBlendLines(Color pixel, List<PigmentCoefficients> paints, double[] weights, string header)
         {
             const int MaxNamedPaints = 5;
 

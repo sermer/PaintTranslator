@@ -17,10 +17,23 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.6.3" />
     <PackageReference Include="xunit" Version="2.4.2" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5" />
+    <!-- The parity gate compares this project's kernel against Unicolour's independent
+         implementation. Referenced here explicitly because Task 14 drops Unicolour from
+         the application, and the gate must outlive that removal. -->
+    <PackageReference Include="Wacton.Unicolour" Version="8.0.0" />
+    <PackageReference Include="Wacton.Unicolour.Datasets" Version="5.0.0" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PaintTranslator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The derivation is tested directly rather than through its output, so it is
+         compiled in here. SpreadsheetReader comes with it because GoldenSpectraSource
+         calls it; linking one without the other does not compile. -->
+    <Compile Include="..\Tools\IngestSpectra\GoldenSpectraSource.cs" Link="Ingest\GoldenSpectraSource.cs" />
+    <Compile Include="..\Tools\IngestSpectra\SpreadsheetReader.cs" Link="Ingest\SpreadsheetReader.cs" />
   </ItemGroup>
 
   <ItemGroup>

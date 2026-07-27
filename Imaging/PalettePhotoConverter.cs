@@ -4,13 +4,14 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using PaintTranslator.Pigments;
 
 namespace PaintTranslator.Imaging
 {
     /// <summary>
     /// Recreates a photo using only a given set of paints and their physical
     /// mixtures. The achievable gamut is sampled by blending the paints
-    /// subtractively (via <see cref="SubtractivePaintMixer"/>) alone, in pairs,
+    /// through the measured Kubelka-Munk kernel alone, in pairs,
     /// and in triples at several ratios; each pixel is then replaced with the
     /// achievable color nearest to it in CIELAB space, so "closest" matches
     /// human perception rather than raw RGB distance. Optionally the residual
@@ -96,29 +97,29 @@ namespace PaintTranslator.Imaging
         /// for each pixel. Alpha is preserved from the source.
         /// </summary>
         /// <param name="source">The photo to convert; it is not modified.</param>
-        /// <param name="paintColors">The mass-tone colors of the paints available for mixing.</param>
+        /// <param name="paints">The paints available for mixing.</param>
         /// <param name="dither">True to diffuse each substitution's residual error to
         /// neighboring pixels, smoothing gradients at the cost of a slight texture;
         /// false to map every pixel independently, giving flat color regions.</param>
         /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
-        /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/> or <paramref name="paintColors"/> is null.</exception>
-        /// <exception cref="ArgumentException">Thrown when <paramref name="paintColors"/> is empty.</exception>
-        public static Bitmap Convert(Bitmap source, IReadOnlyList<Color> paintColors, bool dither = false)
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/> or <paramref name="paints"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
+        public static Bitmap Convert(Bitmap source, IReadOnlyList<PigmentCoefficients> paints, bool dither = false)
         {
             if (source == null)
             {
                 throw new ArgumentNullException(nameof(source));
             }
-            if (paintColors == null)
+            if (paints == null)
             {
-                throw new ArgumentNullException(nameof(paintColors));
+                throw new ArgumentNullException(nameof(paints));
             }
-            if (paintColors.Count == 0)
+            if (paints.Count == 0)
             {
-                throw new ArgumentException("At least one paint is required.", nameof(paintColors));
+                throw new ArgumentException("At least one paint is required.", nameof(paints));
             }
 
-            CandidateSet candidates = BuildCandidates(paintColors);
+            CandidateSet candidates = BuildCandidates(paints);
 
             int width = source.Width;
             int height = source.Height;
@@ -322,27 +323,21 @@ namespace PaintTranslator.Imaging
         /// a few interior weightings, all blended subtractively. Duplicate
         /// resulting colors are collapsed to keep the search set small.
         /// </summary>
-        /// <param name="paintColors">The mass-tone colors of the available paints.</param>
+        /// <param name="paints">The available paints.</param>
         /// <returns>The deduplicated candidate colors with precomputed CIELAB coordinates.</returns>
-        private static CandidateSet BuildCandidates(IReadOnlyList<Color> paintColors)
+        private static CandidateSet BuildCandidates(IReadOnlyList<PigmentCoefficients> paints)
         {
-            int count = paintColors.Count;
-
-            // Convert each paint to its mixing spectrum once; every sampled
-            // mixture below reuses these.
-            var spectra = new PaintSpectrum[count];
-            for (int i = 0; i < count; i++)
-            {
-                spectra[i] = SubtractivePaintMixer.ToSpectrum(paintColors[i]);
-            }
-
+            int count = paints.Count;
+            var reflectance = new double[SpectralBands.Count];
             var seen = new HashSet<int>();
             var argbs = new List<int>();
 
-            // Each paint straight from the tube.
+            // Each paint straight from the tube. A paint has no stored colour any more,
+            // so even the unmixed swatch is the kernel evaluated at full concentration.
             for (int i = 0; i < count; i++)
             {
-                AddCandidate(paintColors[i], seen, argbs);
+                KubelkaMunk.Mix(new[] { paints[i] }, new[] { 1.0 }, reflectance);
+                AddCandidate(SpectralRenderer.ToDisplayColor(reflectance, out _), seen, argbs);
             }
 
             // Every unordered pair, sampled along its mixing line.
@@ -352,10 +347,9 @@ namespace PaintTranslator.Imaging
                 {
                     foreach (double w in PairRatios)
                     {
-                        Color mixed = SubtractivePaintMixer.Mix(
-                            new[] { spectra[i], spectra[j] },
-                            new[] { 1.0 - w, w });
-                        AddCandidate(mixed, seen, argbs);
+                        KubelkaMunk.Mix(
+                            new[] { paints[i], paints[j] }, new[] { 1.0 - w, w }, reflectance);
+                        AddCandidate(SpectralRenderer.ToDisplayColor(reflectance, out _), seen, argbs);
                     }
                 }
             }
@@ -371,9 +365,8 @@ namespace PaintTranslator.Imaging
                     {
                         foreach (double[] w in TripleWeights)
                         {
-                            Color mixed = SubtractivePaintMixer.Mix(
-                                new[] { spectra[i], spectra[j], spectra[k] }, w);
-                            AddCandidate(mixed, seen, argbs);
+                            KubelkaMunk.Mix(new[] { paints[i], paints[j], paints[k] }, w, reflectance);
+                            AddCandidate(SpectralRenderer.ToDisplayColor(reflectance, out _), seen, argbs);
                         }
                     }
                 }
@@ -556,47 +549,12 @@ namespace PaintTranslator.Imaging
         /// <param name="labB">The resulting b* component.</param>
         internal static void RgbToLab(int r, int g, int b, out double labL, out double labA, out double labB)
         {
-            double rl = SrgbToLinear(r);
-            double gl = SrgbToLinear(g);
-            double bl = SrgbToLinear(b);
+            double rl = ColorSpace.SrgbToLinear(r / 255.0);
+            double gl = ColorSpace.SrgbToLinear(g / 255.0);
+            double bl = ColorSpace.SrgbToLinear(b / 255.0);
 
-            // Linear sRGB to CIE XYZ using the standard D65 matrix.
-            double x = 0.4124564 * rl + 0.3575761 * gl + 0.1804375 * bl;
-            double y = 0.2126729 * rl + 0.7151522 * gl + 0.0721750 * bl;
-            double z = 0.0193339 * rl + 0.1191920 * gl + 0.9503041 * bl;
-
-            // Normalize by the D65 reference white before the Lab transfer curve.
-            double fx = LabTransfer(x / 0.95047);
-            double fy = LabTransfer(y / 1.00000);
-            double fz = LabTransfer(z / 1.08883);
-
-            labL = 116.0 * fy - 16.0;
-            labA = 500.0 * (fx - fy);
-            labB = 200.0 * (fy - fz);
-        }
-
-        /// <summary>
-        /// Applies the CIELAB transfer curve: a cube root with a linear segment
-        /// near zero to keep the slope finite for very dark values.
-        /// </summary>
-        /// <param name="t">The white-point-normalized tristimulus value.</param>
-        /// <returns>The transfer-curve output used by the L*, a*, b* formulas.</returns>
-        private static double LabTransfer(double t)
-        {
-            const double Epsilon = 216.0 / 24389.0;
-            const double Kappa = 24389.0 / 27.0;
-            return t > Epsilon ? Math.Cbrt(t) : (Kappa * t + 16.0) / 116.0;
-        }
-
-        /// <summary>
-        /// Decodes an 8-bit sRGB channel to linear light in [0, 1].
-        /// </summary>
-        /// <param name="channel">The sRGB-encoded channel value, 0 to 255.</param>
-        /// <returns>The linear-light value of the channel.</returns>
-        private static double SrgbToLinear(int channel)
-        {
-            double c = channel / 255.0;
-            return c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+            ColorSpace.LinearRgbToXyz(rl, gl, bl, out double x, out double y, out double z);
+            ColorSpace.XyzToLab(x, y, z, out labL, out labA, out labB);
         }
     }
 }

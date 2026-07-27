@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
 using PaintTranslator.Data;
+using PaintTranslator.Pigments;
 
 namespace PaintTranslator
 {
@@ -34,7 +35,7 @@ namespace PaintTranslator
             suppressCheckEvents = true;
             try
             {
-                foreach (GoldenPaint paint in GoldenPalette.Paints)
+                foreach (PigmentCoefficients paint in PigmentLibrary.Selectable)
                 {
                     allPaintsCheckedListBox.Items.Add(paint, currentPaletteNames.Contains(paint.Name));
                 }
@@ -58,7 +59,7 @@ namespace PaintTranslator
                 var names = new List<string>(allPaintsCheckedListBox.CheckedItems.Count);
                 foreach (object item in allPaintsCheckedListBox.CheckedItems)
                 {
-                    if (item is GoldenPaint paint)
+                    if (item is PigmentCoefficients paint)
                     {
                         names.Add(paint.Name);
                     }

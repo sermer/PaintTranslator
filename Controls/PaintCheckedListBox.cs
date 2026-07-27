@@ -1,12 +1,12 @@
 using System.Drawing;
 using System.Windows.Forms;
-using PaintTranslator.Data;
+using PaintTranslator.Pigments;
 
 namespace PaintTranslator.Controls
 {
     /// <summary>
     /// A checked list box that draws a color swatch on the right edge of each row
-    /// when the item is a <see cref="GoldenPaint"/>, so the paint's actual color
+    /// when the item is a <see cref="PigmentCoefficients"/>, so the paint's actual color
     /// is visible next to its name.
     /// </summary>
     public class PaintCheckedListBox : CheckedListBox
@@ -27,7 +27,7 @@ namespace PaintTranslator.Controls
             base.OnDrawItem(e);
 
             // Design-time and empty-list paints pass an index of -1; nothing to swatch.
-            if (e.Index < 0 || e.Index >= Items.Count || !(Items[e.Index] is GoldenPaint paint))
+            if (e.Index < 0 || e.Index >= Items.Count || !(Items[e.Index] is PigmentCoefficients paint))
             {
                 return;
             }
@@ -38,7 +38,13 @@ namespace PaintTranslator.Controls
                 SwatchWidth,
                 e.Bounds.Height - SwatchMargin * 2);
 
-            using (var brush = new SolidBrush(paint.Color))
+            // The paint carries curves rather than a colour, so the swatch is the
+            // kernel evaluated at full concentration - the same mass tone the wheel and
+            // the recipes use, rather than a separate stored value that could disagree.
+            var reflectance = new double[SpectralBands.Count];
+            KubelkaMunk.Mix(new[] { paint }, new[] { 1.0 }, reflectance);
+
+            using (var brush = new SolidBrush(SpectralRenderer.ToDisplayColor(reflectance, out _)))
             {
                 e.Graphics.FillRectangle(brush, swatch);
             }
