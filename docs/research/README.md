@@ -3,6 +3,11 @@
 Research into how acrylic paints blend, how to translate RGB photos into paint
 mixtures, and how that should be modelled in PaintTranslator.
 
+This folder is about **physical accuracy**. For the separate question of making the
+converter follow an artistic *style* rather than always picking the nearest colour, see
+[painting-style/](painting-style/README.md) — colour theory in practice, styles and
+movements, brushwork and edges, and what makes a painting appealing.
+
 ## Start here
 
 | Document | What it's for |
