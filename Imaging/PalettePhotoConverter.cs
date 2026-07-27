@@ -14,11 +14,13 @@ namespace PaintTranslator.Imaging
     /// the measured Kubelka-Munk kernel alone, in pairs along their whole mixing
     /// line, and in triples across their whole mixing triangle; each pixel is then
     /// replaced with the achievable color nearest to it in CIELAB space, so
-    /// "closest" matches human perception rather than raw RGB distance. Optionally
-    /// the residual error of each substitution is diffused to neighboring pixels
-    /// (Floyd-Steinberg), trading the flat posterized patches of plain nearest-
-    /// color mapping for a slight texture whose local average tracks the
-    /// original color.
+    /// "closest" matches human perception rather than raw RGB distance. The photo
+    /// can optionally be Gaussian-blurred first, which smooths away the sensor noise
+    /// and fine detail that no brush is going to reproduce, so the mapping settles
+    /// on larger flat regions instead of speckling between neighboring mixtures.
+    /// Blurring belongs before the mapping and not after it: averaging two mapped
+    /// pixels together produces a color partway between two mixtures, which is not
+    /// itself a color the paints can be mixed to.
     /// <para>
     /// The proportions are sampled as continuous shares rather than a few fixed
     /// ratios. Because the output is an 8-bit image and identical colors are
@@ -287,13 +289,13 @@ namespace PaintTranslator.Imaging
         /// </summary>
         /// <param name="source">The photo to convert; it is not modified.</param>
         /// <param name="paints">The paints available for mixing.</param>
-        /// <param name="dither">True to diffuse each substitution's residual error to
-        /// neighboring pixels, smoothing gradients at the cost of a slight texture;
-        /// false to map every pixel independently, giving flat color regions.</param>
+        /// <param name="blurRadius">The radius, in pixels, of the Gaussian blur applied
+        /// to the photo before it is mapped, which trades fine detail for larger flat
+        /// regions. Zero maps the photo exactly as it arrived.</param>
         /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/> or <paramref name="paints"/> is null.</exception>
         /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
-        public static Bitmap Convert(Bitmap source, IReadOnlyList<PigmentCoefficients> paints, bool dither = false)
+        public static Bitmap Convert(Bitmap source, IReadOnlyList<PigmentCoefficients> paints, int blurRadius = 0)
         {
             if (source == null)
             {
@@ -332,14 +334,10 @@ namespace PaintTranslator.Imaging
                 var pixels = new int[strideInts * height];
                 Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
 
-                if (dither)
-                {
-                    MapPixelsDithered(pixels, strideInts, width, height, candidates);
-                }
-                else
-                {
-                    MapPixelsFlat(pixels, strideInts, width, height, candidates);
-                }
+                // Smoothing first means the mapping sees the softened photo, so every
+                // color it emits is still one the paints can actually be mixed to.
+                GaussianBlur.Apply(pixels, strideInts, width, height, blurRadius);
+                MapPixelsFlat(pixels, strideInts, width, height, candidates);
 
                 Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
             }
@@ -405,104 +403,6 @@ namespace PaintTranslator.Imaging
                     int alpha = pixel & unchecked((int)0xFF000000);
                     pixels[row + x] = alpha | (mapped[CacheKey(pixel)] & 0x00FFFFFF);
                 }
-            }
-        }
-
-        /// <summary>
-        /// Replaces each pixel's RGB with the nearest achievable color while
-        /// diffusing the residual error to unvisited neighbors using
-        /// Floyd-Steinberg weights on a serpentine scan, so the local average of
-        /// the output tracks the original color across gradients. Inherently
-        /// sequential, since every pixel depends on its predecessors' errors.
-        /// Alpha is left untouched.
-        /// </summary>
-        /// <param name="pixels">The image's ARGB pixels, modified in place.</param>
-        /// <param name="strideInts">The number of ints per pixel row (stride / 4).</param>
-        /// <param name="width">The image width in pixels.</param>
-        /// <param name="height">The image height in pixels.</param>
-        /// <param name="candidates">The achievable-gamut colors, sorted by L*.</param>
-        private static void MapPixelsDithered(int[] pixels, int strideInts, int width, int height, CandidateSet candidates)
-        {
-            // Nearest-color results are resolved lazily as targets appear; entry
-            // 0 means unresolved, which no real entry can collide with because
-            // every candidate ARGB carries full alpha bits.
-            var mapped = new int[CacheSize];
-
-            // Accumulated error for the row being scanned and the row below it,
-            // three doubles (R, G, B) per pixel.
-            var currentError = new double[width * 3];
-            var nextError = new double[width * 3];
-
-            for (int y = 0; y < height; y++)
-            {
-                int row = y * strideInts;
-
-                // Serpentine scan: alternating direction stops the diffusion
-                // pattern from smearing consistently to one side.
-                bool leftToRight = (y & 1) == 0;
-                int xStart = leftToRight ? 0 : width - 1;
-                int xEnd = leftToRight ? width : -1;
-                int xStep = leftToRight ? 1 : -1;
-
-                for (int x = xStart; x != xEnd; x += xStep)
-                {
-                    int pixel = pixels[row + x];
-                    int e = x * 3;
-
-                    // The clamp bounds the residual at gamut walls: colors the
-                    // paints can never reach would otherwise pile up error
-                    // without limit and streak across the image.
-                    int targetR = Math.Clamp((int)Math.Round(((pixel >> 16) & 0xFF) + currentError[e]), 0, 255);
-                    int targetG = Math.Clamp((int)Math.Round(((pixel >> 8) & 0xFF) + currentError[e + 1]), 0, 255);
-                    int targetB = Math.Clamp((int)Math.Round((pixel & 0xFF) + currentError[e + 2]), 0, 255);
-
-                    int key = CacheKey(targetR, targetG, targetB);
-                    int candidate = mapped[key];
-                    if (candidate == 0)
-                    {
-                        candidate = NearestCandidateArgb(candidates, key);
-                        mapped[key] = candidate;
-                    }
-
-                    pixels[row + x] = (pixel & unchecked((int)0xFF000000)) | (candidate & 0x00FFFFFF);
-
-                    double errorR = targetR - ((candidate >> 16) & 0xFF);
-                    double errorG = targetG - ((candidate >> 8) & 0xFF);
-                    double errorB = targetB - (candidate & 0xFF);
-
-                    // Floyd-Steinberg distribution, mirrored to match the scan
-                    // direction: 7/16 ahead, 3/16 behind-below, 5/16 below,
-                    // 1/16 ahead-below.
-                    int ahead = x + xStep;
-                    int behind = x - xStep;
-                    if (ahead >= 0 && ahead < width)
-                    {
-                        int ae = ahead * 3;
-                        currentError[ae] += errorR * (7.0 / 16.0);
-                        currentError[ae + 1] += errorG * (7.0 / 16.0);
-                        currentError[ae + 2] += errorB * (7.0 / 16.0);
-                        nextError[ae] += errorR * (1.0 / 16.0);
-                        nextError[ae + 1] += errorG * (1.0 / 16.0);
-                        nextError[ae + 2] += errorB * (1.0 / 16.0);
-                    }
-                    if (behind >= 0 && behind < width)
-                    {
-                        int be = behind * 3;
-                        nextError[be] += errorR * (3.0 / 16.0);
-                        nextError[be + 1] += errorG * (3.0 / 16.0);
-                        nextError[be + 2] += errorB * (3.0 / 16.0);
-                    }
-                    nextError[e] += errorR * (5.0 / 16.0);
-                    nextError[e + 1] += errorG * (5.0 / 16.0);
-                    nextError[e + 2] += errorB * (5.0 / 16.0);
-                }
-
-                // The next row's accumulated error becomes current; the freed
-                // buffer is cleared for reuse as the new next row.
-                double[] swap = currentError;
-                currentError = nextError;
-                nextError = swap;
-                Array.Clear(nextError, 0, nextError.Length);
             }
         }
 

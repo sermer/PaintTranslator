@@ -446,9 +446,9 @@ namespace PaintTranslator
             {
                 // Read the option on the UI thread; the conversion itself runs
                 // on a worker where touching controls isn't allowed.
-                bool dither = ditherCheckBox.Checked;
+                int blurRadius = blurTrackBar.Value;
 
-                Bitmap converted = await Task.Run(() => PalettePhotoConverter.Convert(sourcePhoto, selected, dither));
+                Bitmap converted = await Task.Run(() => PalettePhotoConverter.Convert(sourcePhoto, selected, blurRadius));
 
                 SetDisplayedImage(converted);
                 wheelDisplayed = false;
@@ -463,6 +463,21 @@ namespace PaintTranslator
             {
                 SetImageOperationInProgress(false);
             }
+        }
+
+        /// <summary>
+        /// Updates the blur label to read back the slider's current radius, since a
+        /// bare slider gives no indication of the value it is sitting on.
+        /// </summary>
+        /// <param name="sender">The slider that raised the event.</param>
+        /// <param name="e">The event arguments.</param>
+        private void BlurTrackBar_ValueChanged(object sender, EventArgs e)
+        {
+            int radius = blurTrackBar.Value;
+
+            // "0 px" would read as a setting rather than as the blur being absent,
+            // which is what a zero radius actually means.
+            blurLabel.Text = radius == 0 ? "Blur: off" : $"Blur: {radius} px";
         }
 
         /// <summary>

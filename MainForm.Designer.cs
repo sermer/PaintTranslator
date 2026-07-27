@@ -42,12 +42,14 @@ namespace PaintTranslator
             this.selectAllCheckBox = new System.Windows.Forms.CheckBox();
             this.paintsCheckedListBox = new PaintTranslator.Controls.PaintCheckedListBox();
             this.editPaletteButton = new System.Windows.Forms.Button();
-            this.ditherCheckBox = new System.Windows.Forms.CheckBox();
+            this.blurLabel = new System.Windows.Forms.Label();
+            this.blurTrackBar = new System.Windows.Forms.TrackBar();
             this.convertPhotoButton = new System.Windows.Forms.Button();
             this.toolbarPanel.SuspendLayout();
             this.palettePanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.columnsNumericUpDown)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.rowsNumericUpDown)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.blurTrackBar)).BeginInit();
             this.SuspendLayout();
             //
             // toolbarPanel
@@ -171,7 +173,8 @@ namespace PaintTranslator
             this.palettePanel.Controls.Add(this.paintsCheckedListBox);
             this.palettePanel.Controls.Add(this.selectAllCheckBox);
             this.palettePanel.Controls.Add(this.editPaletteButton);
-            this.palettePanel.Controls.Add(this.ditherCheckBox);
+            this.palettePanel.Controls.Add(this.blurLabel);
+            this.palettePanel.Controls.Add(this.blurTrackBar);
             this.palettePanel.Controls.Add(this.convertPhotoButton);
             this.palettePanel.Dock = System.Windows.Forms.DockStyle.Right;
             this.palettePanel.Location = new System.Drawing.Point(734, 54);
@@ -211,20 +214,33 @@ namespace PaintTranslator
             this.paintsCheckedListBox.IntegralHeight = false;
             this.paintsCheckedListBox.Location = new System.Drawing.Point(0, 24);
             this.paintsCheckedListBox.Name = "paintsCheckedListBox";
-            this.paintsCheckedListBox.Size = new System.Drawing.Size(250, 583);
+            this.paintsCheckedListBox.Size = new System.Drawing.Size(250, 484);
             this.paintsCheckedListBox.TabIndex = 11;
             this.paintsCheckedListBox.ItemCheck += new System.Windows.Forms.ItemCheckEventHandler(this.PaintsCheckedListBox_ItemCheck);
             //
-            // ditherCheckBox
+            // blurLabel
             //
-            this.ditherCheckBox.Dock = System.Windows.Forms.DockStyle.Bottom;
-            this.ditherCheckBox.Location = new System.Drawing.Point(0, 549);
-            this.ditherCheckBox.Name = "ditherCheckBox";
-            this.ditherCheckBox.Padding = new System.Windows.Forms.Padding(6, 2, 0, 0);
-            this.ditherCheckBox.Size = new System.Drawing.Size(250, 24);
-            this.ditherCheckBox.TabIndex = 13;
-            this.ditherCheckBox.Text = "Dither (smoother blending)";
-            this.ditherCheckBox.UseVisualStyleBackColor = true;
+            this.blurLabel.AutoSize = false;
+            this.blurLabel.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.blurLabel.Location = new System.Drawing.Point(0, 508);
+            this.blurLabel.Name = "blurLabel";
+            this.blurLabel.Padding = new System.Windows.Forms.Padding(6, 0, 0, 0);
+            this.blurLabel.Size = new System.Drawing.Size(250, 20);
+            this.blurLabel.TabIndex = 15;
+            this.blurLabel.Text = "Blur: 2 px";
+            this.blurLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            //
+            // blurTrackBar
+            //
+            this.blurTrackBar.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.blurTrackBar.Location = new System.Drawing.Point(0, 528);
+            this.blurTrackBar.Maximum = 20;
+            this.blurTrackBar.Name = "blurTrackBar";
+            this.blurTrackBar.Size = new System.Drawing.Size(250, 45);
+            this.blurTrackBar.TabIndex = 13;
+            this.blurTrackBar.TickFrequency = 2;
+            this.blurTrackBar.Value = 2;
+            this.blurTrackBar.ValueChanged += new System.EventHandler(this.BlurTrackBar_ValueChanged);
             //
             // convertPhotoButton
             //
@@ -257,6 +273,7 @@ namespace PaintTranslator
             this.palettePanel.ResumeLayout(false);
             ((System.ComponentModel.ISupportInitialize)(this.columnsNumericUpDown)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.rowsNumericUpDown)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.blurTrackBar)).EndInit();
             this.ResumeLayout(false);
         }
 
@@ -276,7 +293,8 @@ namespace PaintTranslator
         private System.Windows.Forms.CheckBox selectAllCheckBox;
         private System.Windows.Forms.Button editPaletteButton;
         private PaintTranslator.Controls.PaintCheckedListBox paintsCheckedListBox;
-        private System.Windows.Forms.CheckBox ditherCheckBox;
+        private System.Windows.Forms.Label blurLabel;
+        private System.Windows.Forms.TrackBar blurTrackBar;
         private System.Windows.Forms.Button convertPhotoButton;
     }
 }
