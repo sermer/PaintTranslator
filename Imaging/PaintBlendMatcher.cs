@@ -33,42 +33,12 @@ namespace PaintTranslator.Imaging
         // is within tolerance rather than whether an image reads correctly.
         private const double LightnessWeight = 1.5;
 
-        // Single-paint recipes need no ladder; the paint is used straight from the tube.
-        private static readonly int[][] SingleParts =
-        {
-            new[] { 1 },
-        };
-
-        // Two-paint recipes, in whole parts of each paint. The ladder is geometric
-        // rather than evenly spaced because the visible error from rounding a ratio
-        // scales with the ratio: near even, one part either way is an obvious shift,
-        // while past about 1:8 the same absolute step is barely perceptible. Evenly
-        // spaced eighths therefore waste candidates at the wide end and miss useful
-        // ones near even, and no sampling finer than this survives being scooped out
-        // of a tube by hand. Endpoints are covered by the single-paint recipes.
-        private static readonly int[][] PairParts =
-        {
-            new[] { 1, 1 },
-            new[] { 3, 2 }, new[] { 2, 3 },
-            new[] { 2, 1 }, new[] { 1, 2 },
-            new[] { 3, 1 }, new[] { 1, 3 },
-            new[] { 5, 1 }, new[] { 1, 5 },
-            new[] { 8, 1 }, new[] { 1, 8 },
-            new[] { 12, 1 }, new[] { 1, 12 },
-            new[] { 20, 1 }, new[] { 1, 20 },
-        };
-
-        // Three-paint recipes, in whole parts: equal thirds plus each paint doubled
-        // against the other two. Edges of the mixing triangle are covered by the pair
-        // recipes. Past three paints a mixture keeps barely a quarter of its parents'
-        // chroma, so deeper combinations are not worth sampling.
-        private static readonly int[][] TripleParts =
-        {
-            new[] { 1, 1, 1 },
-            new[] { 2, 1, 1 },
-            new[] { 1, 2, 1 },
-            new[] { 1, 1, 2 },
-        };
+        // The smallest share a paint can hold and still be named in a recipe. Below one
+        // percent a paint is an artefact of where the solver's refinement happened to
+        // stop rather than something anyone would put on a palette, and printing
+        // "0% Cadmium Yellow" states a quantity nobody can act on. Such a paint is
+        // dropped from the recipe and its share spread across the ones that remain.
+        private const double MinimumShare = 0.005;
 
         // The paints this matcher mixes from, in the caller's order; BlendMatch reports
         // indices into this list.
@@ -90,50 +60,36 @@ namespace PaintTranslator.Imaging
             /// </summary>
             /// <param name="mixedColor">The color the recipe mixes to.</param>
             /// <param name="paintIndices">The indices of the participating paints in the matcher's paint list.</param>
-            /// <param name="parts">Each participating paint's whole number of parts, index-aligned with <paramref name="paintIndices"/>.</param>
+            /// <param name="weights">Each participating paint's share of the mixture,
+            /// summing to 1 and index-aligned with <paramref name="paintIndices"/>.</param>
             /// <param name="exactDistance">The distance at the unrounded proportions the
             /// solver found.</param>
-            /// <param name="snappedDistance">The distance at the whole parts reported.</param>
+            /// <param name="snappedDistance">The distance at the rounded percentages reported.</param>
             /// <param name="chromaLost">The Oklab chroma the mixture gave up to be shown
             /// on screen, or zero when it was already displayable.</param>
             public BlendMatch(
                 Color mixedColor,
                 IReadOnlyList<int> paintIndices,
-                IReadOnlyList<int> parts,
+                IReadOnlyList<double> weights,
                 double exactDistance = 0.0,
                 double snappedDistance = 0.0,
                 double chromaLost = 0.0)
             {
                 MixedColor = mixedColor;
                 PaintIndices = paintIndices;
-                Parts = parts;
+                Weights = weights;
                 ExactDistance = exactDistance;
                 SnappedDistance = snappedDistance;
                 ChromaLost = chromaLost;
-
-                // The mixer works in fractional shares while the user reads whole
-                // parts, so both views are derived from the one source here rather
-                // than tracked separately and risking disagreement.
-                int totalParts = 0;
-                for (int i = 0; i < parts.Count; i++)
-                {
-                    totalParts += parts[i];
-                }
-
-                var shares = new double[parts.Count];
-                for (int i = 0; i < parts.Count; i++)
-                {
-                    shares[i] = (double)parts[i] / totalParts;
-                }
-                Weights = shares;
+                Percentages = ToPercentages(weights);
             }
 
             /// <summary>
-            /// Gets each participating paint's whole number of parts in the recipe,
-            /// index-aligned with <see cref="PaintIndices"/>. This is the form the
-            /// recipe is reported in, because parts are what a person can measure out.
+            /// Gets each participating paint's share of the recipe as a whole percentage,
+            /// index-aligned with <see cref="PaintIndices"/> and summing to exactly 100.
+            /// This is the form the recipe is reported in.
             /// </summary>
-            public IReadOnlyList<int> Parts { get; }
+            public IReadOnlyList<int> Percentages { get; }
 
             /// <summary>
             /// Gets the color the recipe mixes to.
@@ -159,9 +115,9 @@ namespace PaintTranslator.Imaging
             public double ExactDistance { get; }
 
             /// <summary>
-            /// Gets the perceptual distance at the whole parts actually reported. The gap
-            /// between this and <see cref="ExactDistance"/> is what rounding to a recipe
-            /// someone can measure out by hand cost, which is worth showing when it is
+            /// Gets the perceptual distance at the rounded percentages actually reported.
+            /// The gap between this and <see cref="ExactDistance"/> is what rounding to
+            /// whole percentages cost, which is worth showing on the rare occasion it is
             /// large enough to see.
             /// </summary>
             public double SnappedDistance { get; }
@@ -214,6 +170,74 @@ namespace PaintTranslator.Imaging
             double db = firstB - secondB;
 
             return (LightnessWeight * lightnessDifference) + Math.Sqrt((da * da) + (db * db));
+        }
+
+        /// <summary>
+        /// Rounds fractional shares to whole percentages that still sum to exactly 100.
+        /// </summary>
+        /// <param name="weights">The shares to round, summing to 1.</param>
+        /// <returns>The whole percentages, index-aligned with <paramref name="weights"/>.</returns>
+        private static int[] ToPercentages(IReadOnlyList<double> weights)
+        {
+            // Largest remainder: floor every share, then hand the leftover points to
+            // whichever shares were cut hardest. Rounding each share on its own would let
+            // a recipe total 99 or 101, and a recipe whose numbers do not add up reads as
+            // a bug even when the mixture behind it is right.
+            var percentages = new int[weights.Count];
+            var remainders = new double[weights.Count];
+            int assigned = 0;
+
+            for (int i = 0; i < weights.Count; i++)
+            {
+                double exact = weights[i] * 100.0;
+                percentages[i] = (int)Math.Floor(exact);
+                remainders[i] = exact - percentages[i];
+                assigned += percentages[i];
+            }
+
+            for (int point = assigned; point < 100; point++)
+            {
+                int target = 0;
+                for (int i = 1; i < remainders.Length; i++)
+                {
+                    if (remainders[i] > remainders[target])
+                    {
+                        target = i;
+                    }
+                }
+
+                percentages[target]++;
+
+                // Spent remainders are pushed below any real one so a single share cannot
+                // collect every leftover point.
+                remainders[target] = -1.0;
+            }
+
+            // A share just above the drop threshold can still floor to zero and then lose
+            // the contest for every leftover point. Lifting it off zero at the largest
+            // share's expense keeps every named paint to a quantity someone can act on,
+            // and costs the mixture one percentage point.
+            for (int i = 0; i < percentages.Length; i++)
+            {
+                if (percentages[i] > 0)
+                {
+                    continue;
+                }
+
+                int largest = 0;
+                for (int j = 1; j < percentages.Length; j++)
+                {
+                    if (percentages[j] > percentages[largest])
+                    {
+                        largest = j;
+                    }
+                }
+
+                percentages[largest]--;
+                percentages[i]++;
+            }
+
+            return percentages;
         }
 
         /// <summary>
@@ -274,23 +298,6 @@ namespace PaintTranslator.Imaging
         }
 
         /// <summary>
-        /// Converts whole parts to the fractional shares the kernel takes. The kernel
-        /// normalises the shares itself, so raw part counts pass through unchanged.
-        /// </summary>
-        /// <param name="parts">Each paint's whole number of parts.</param>
-        /// <returns>The parts as mixing shares.</returns>
-        private static double[] ToShares(int[] parts)
-        {
-            var shares = new double[parts.Length];
-            for (int i = 0; i < parts.Length; i++)
-            {
-                shares[i] = parts[i];
-            }
-
-            return shares;
-        }
-
-        /// <summary>
         /// One query's exhaustive walk over the subsets, holding the scratch buffers and
         /// the best result found so far.
         /// <para>
@@ -331,6 +338,14 @@ namespace PaintTranslator.Imaging
 
             /// <summary>The winning subset's paint indices.</summary>
             private readonly int[] bestIndices = new int[3];
+
+            /// <summary>
+            /// The winning subset's solved shares. Copied out when a subset wins because
+            /// the share buffers are scratch: the very next subset considered overwrites
+            /// them, and by the time the search ends the winner's proportions would
+            /// otherwise be long gone.
+            /// </summary>
+            private readonly double[] bestShares = new double[3];
 
             /// <summary>How many paints the winning subset holds.</summary>
             private int bestSize;
@@ -375,10 +390,11 @@ namespace PaintTranslator.Imaging
                 }
 
                 var view = new ArraySegment<PigmentCoefficients>(this.subset, 0, size);
+                double[] solved = this.shareBuffers[size - 1];
 
                 double distance = SubsetSolver.SolveReusing(
                     view, this.targetL, this.targetA, this.targetB,
-                    this.shareBuffers[size - 1], this.reflectance);
+                    solved, this.reflectance);
 
                 if (distance >= this.bestDistance)
                 {
@@ -390,6 +406,7 @@ namespace PaintTranslator.Imaging
                 this.bestIndices[0] = first;
                 this.bestIndices[1] = second;
                 this.bestIndices[2] = third;
+                Array.Copy(solved, this.bestShares, size);
             }
 
             /// <summary>
@@ -406,17 +423,23 @@ namespace PaintTranslator.Imaging
                 this.bestDistance = other.bestDistance;
                 this.bestSize = other.bestSize;
                 Array.Copy(other.bestIndices, this.bestIndices, other.bestIndices.Length);
+                Array.Copy(other.bestShares, this.bestShares, other.bestShares.Length);
             }
 
             /// <summary>
-            /// Rounds the winning subset's proportions to whole parts and builds the
-            /// match.
+            /// Builds the match from the winning subset's solved proportions.
             /// <para>
-            /// The rung chosen is the one whose mixture lands closest to the target, not
-            /// the one whose numbers are closest to the solved proportions. Those differ:
-            /// the paints in a subset rarely have equal tinting strength, so a share
-            /// moved by a tenth matters far more in some directions than others, and it
-            /// is the resulting colour that the user sees.
+            /// The proportions are reported as the solver found them, so the recipe is
+            /// whatever gets closest to the target rather than whichever rung of a fixed
+            /// ratio ladder happened to be nearest. A ladder cost real accuracy: the
+            /// paints in a subset rarely have comparable tinting strength, and next to a
+            /// pigment as strong as phthalo blue the gap between one part in six and one
+            /// in eight is an obvious shift in the mixed colour.
+            /// </para>
+            /// <para>
+            /// Paints holding a negligible share are dropped rather than named at zero,
+            /// which is what turns a triple the solver has effectively reduced to a pair
+            /// back into a two-paint recipe.
             /// </para>
             /// </summary>
             /// <returns>The best mixture and its recipe, or null when nothing was
@@ -428,40 +451,68 @@ namespace PaintTranslator.Imaging
                     return null;
                 }
 
+                // Discard the negligible paints first, so everything downstream — the
+                // subset that gets mixed, the indices reported and the percentages
+                // rounded — describes the same recipe.
+                var indices = new int[this.bestSize];
+                var weights = new double[this.bestSize];
+                int kept = 0;
+                double keptTotal = 0.0;
+
                 for (int i = 0; i < this.bestSize; i++)
                 {
-                    this.subset[i] = this.paints[this.bestIndices[i]];
-                }
-
-                var view = new ArraySegment<PigmentCoefficients>(this.subset, 0, this.bestSize);
-                int[][] ladder = this.bestSize == 1 ? SingleParts
-                    : this.bestSize == 2 ? PairParts
-                    : TripleParts;
-
-                int[] bestParts = ladder[0];
-                double snappedDistance = double.MaxValue;
-
-                foreach (int[] parts in ladder)
-                {
-                    KubelkaMunk.Mix(view, ToShares(parts), this.reflectance);
-                    SpectralRenderer.ToLab(this.reflectance, out double l, out double a, out double b);
-
-                    double distance = PerceptualDistance(this.targetL, this.targetA, this.targetB, l, a, b);
-                    if (distance < snappedDistance)
+                    if (this.bestShares[i] < MinimumShare)
                     {
-                        snappedDistance = distance;
-                        bestParts = parts;
+                        continue;
                     }
+
+                    indices[kept] = this.bestIndices[i];
+                    weights[kept] = this.bestShares[i];
+                    keptTotal += this.bestShares[i];
+                    kept++;
                 }
 
-                KubelkaMunk.Mix(view, ToShares(bestParts), this.reflectance);
+                // Every share falling below the threshold at once is only possible if the
+                // solver returned nothing usable; keeping the largest leaves a recipe that
+                // is still honest about which paint dominates.
+                if (kept == 0)
+                {
+                    indices[0] = this.bestIndices[0];
+                    weights[0] = 1.0;
+                    kept = 1;
+                    keptTotal = 1.0;
+                }
+
+                Array.Resize(ref indices, kept);
+                Array.Resize(ref weights, kept);
+
+                for (int i = 0; i < kept; i++)
+                {
+                    weights[i] /= keptTotal;
+                    this.subset[i] = this.paints[indices[i]];
+                }
+
+                var view = new ArraySegment<PigmentCoefficients>(this.subset, 0, kept);
+
+                // The swatch is mixed at the percentages the user is shown, not at the
+                // solver's full precision, so what appears beside the recipe is what
+                // following that recipe produces.
+                int[] percentages = ToPercentages(weights);
+                var rounded = new double[kept];
+                for (int i = 0; i < kept; i++)
+                {
+                    rounded[i] = percentages[i] / 100.0;
+                }
+
+                KubelkaMunk.Mix(view, rounded, this.reflectance);
+                SpectralRenderer.ToLab(this.reflectance, out double l, out double a, out double b);
+                double snappedDistance = PerceptualDistance(
+                    this.targetL, this.targetA, this.targetB, l, a, b);
+
                 Color mixed = SpectralRenderer.ToDisplayColor(this.reflectance, out double chromaLost);
 
-                var indices = new int[this.bestSize];
-                Array.Copy(this.bestIndices, indices, this.bestSize);
-
                 return new BlendMatch(
-                    mixed, indices, bestParts, this.bestDistance, snappedDistance, chromaLost);
+                    mixed, indices, weights, this.bestDistance, snappedDistance, chromaLost);
             }
         }
     }

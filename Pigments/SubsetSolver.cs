@@ -21,8 +21,30 @@ namespace PaintTranslator.Pigments
     /// </summary>
     public static class SubsetSolver
     {
-        /// <summary>How many divisions the first, exhaustive sweep uses per axis.</summary>
-        private const int CoarseDivisions = 10;
+        /// <summary>
+        /// How many divisions the first, exhaustive sweep uses along a two-paint subset's
+        /// mixing line.
+        /// <para>
+        /// Far finer than the triangle below, because a line costs one evaluation per
+        /// division where a triangle costs the square of that, and because the line is
+        /// where the awkward objectives live: against a pigment as strong as phthalo
+        /// blue, nearly all of the colour change happens in the first few percent, and
+        /// the distance to a target can have more than one local minimum along the way.
+        /// A coarse sweep lands in whichever basin it happens to sample and the
+        /// refinement below cannot leave it, so the sweep has to be dense enough to find
+        /// the right basin in the first place.
+        /// </para>
+        /// </summary>
+        private const int LineCoarseDivisions = 48;
+
+        /// <summary>
+        /// How many divisions the first, exhaustive sweep uses per axis across a
+        /// three-paint subset's mixing triangle. Held down because the cost is quadratic
+        /// in this and a search visits far more triangles than lines; the interior of a
+        /// triangle is also better behaved than its edges, which the pair subsets sweep
+        /// densely in their own right.
+        /// </summary>
+        private const int TriangleCoarseDivisions = 10;
 
         /// <summary>How many divisions each refinement pass uses per axis.</summary>
         private const int RefineDivisions = 8;
@@ -30,12 +52,13 @@ namespace PaintTranslator.Pigments
         /// <summary>
         /// How many refinement passes run.
         /// <para>
-        /// Each pass quarters the search window, so two passes leave the shares accurate
-        /// to well under a percent. More than that is measurably wasted: the recipe is
-        /// reported in whole parts, and the finest distinction the parts ladder can even
-        /// express is 1:1 against 3:2, a tenth of a share. The search visits over a
-        /// thousand subsets per query, so passes that cannot change the answer are the
-        /// difference between a tooltip that appears and one that stutters.
+        /// Each pass narrows the search window by a factor of four, so two passes locate
+        /// each share to within about three parts in a thousand. That sits comfortably
+        /// inside the whole percentage the recipe is reported to, which is what makes a
+        /// third pass wasted rather than merely cheap: it cannot move a reported figure.
+        /// The search visits over a thousand subsets per query, so passes that cannot
+        /// change the answer are the difference between a tooltip that appears and one
+        /// that stutters.
         /// </para>
         /// </summary>
         private const int RefinePasses = 2;
@@ -140,12 +163,13 @@ namespace PaintTranslator.Pigments
                 bestFree[i] = centre[i];
             }
 
+            int coarseDivisions = subset.Count == 2 ? LineCoarseDivisions : TriangleCoarseDivisions;
             double window = 1.0;
             double best = double.MaxValue;
 
             for (int pass = 0; pass <= RefinePasses; pass++)
             {
-                int divisions = pass == 0 ? CoarseDivisions : RefineDivisions;
+                int divisions = pass == 0 ? coarseDivisions : RefineDivisions;
                 double low = pass == 0 ? 0.0 : Math.Max(0.0, centre[0] - window);
                 double high = pass == 0 ? 1.0 : Math.Min(1.0, centre[0] + window);
 
@@ -204,7 +228,10 @@ namespace PaintTranslator.Pigments
                 }
 
                 Array.Copy(bestFree, centre, centre.Length);
-                window = pass == 0 ? 1.0 / CoarseDivisions : window / RefineDivisions * 2.0;
+
+                // The window has to span one whole step of the pass that just ran, or
+                // refinement can exclude the very interval the true minimum sits in.
+                window = pass == 0 ? 1.0 / coarseDivisions : window / RefineDivisions * 2.0;
             }
 
             shares[0] = centre[0];

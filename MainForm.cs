@@ -806,15 +806,19 @@ namespace PaintTranslator
 
         /// <summary>
         /// Composes the tooltip text for a mixable recipe: the pixel's RGB, each paint
-        /// with its whole number of parts, and how close the mixture actually lands.
+        /// with its percentage of the mixture, and how close the mixture actually lands.
         /// <para>
-        /// Parts rather than percentages, because a recipe is executed by scooping paint
-        /// onto a palette and nobody can measure 63%; the ratios the matcher searches
-        /// are already restricted to ones a hand can manage. The closeness lines matter
-        /// because a limited palette often cannot reach a photo's color at all, and
-        /// silently returning the nearest thing would leave the user believing the mix
-        /// is exact. Saying which way it misses turns that limitation into something
-        /// they can correct for by eye.
+        /// Percentages rather than whole parts, because a ratio ladder can only express
+        /// the mixtures that happen to sit on its rungs, and the paint the ladder misses
+        /// by is exactly the paint whose tinting strength makes it matter. What is
+        /// reported is whatever proportion lands closest to the target colour, rounded
+        /// only far enough to be readable.
+        /// </para>
+        /// <para>
+        /// The closeness lines matter because a limited palette often cannot reach a
+        /// photo's colour at all, and silently returning the nearest thing would leave
+        /// the user believing the mix is exact. Saying which way it misses turns that
+        /// limitation into something they can correct for by eye.
         /// </para>
         /// </summary>
         /// <param name="pixel">The hovered pixel color.</param>
@@ -832,13 +836,11 @@ namespace PaintTranslator
             {
                 order.Add(i);
             }
-            order.Sort((first, second) => match.Parts[second].CompareTo(match.Parts[first]));
+            order.Sort((first, second) => match.Percentages[second].CompareTo(match.Percentages[first]));
 
             foreach (int i in order)
             {
-                int parts = match.Parts[i];
-                string unit = parts == 1 ? "part" : "parts";
-                lines.Add($"{parts} {unit} {paints[match.PaintIndices[i]].Name}");
+                lines.Add($"{match.Percentages[i]}% {paints[match.PaintIndices[i]].Name}");
             }
 
             PalettePhotoConverter.RgbToLab(pixel.R, pixel.G, pixel.B,
@@ -869,7 +871,7 @@ namespace PaintTranslator
             double roundingCost = match.SnappedDistance - match.ExactDistance;
             if (roundingCost > 0.5)
             {
-                lines.Add($"Rounded to whole parts: {match.ExactDistance:0.0} → {match.SnappedDistance:0.0}");
+                lines.Add($"Rounded to whole percent: {match.ExactDistance:0.0} → {match.SnappedDistance:0.0}");
             }
 
             return lines.ToArray();
