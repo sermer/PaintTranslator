@@ -42,14 +42,21 @@ namespace PaintTranslator
             this.selectAllCheckBox = new System.Windows.Forms.CheckBox();
             this.paintsCheckedListBox = new PaintTranslator.Controls.PaintCheckedListBox();
             this.editPaletteButton = new System.Windows.Forms.Button();
+            this.stylePanel = new System.Windows.Forms.FlowLayoutPanel();
+            this.resetStyleButton = new System.Windows.Forms.Button();
+            this.styleLabel = new System.Windows.Forms.Label();
+            this.styleComboBox = new System.Windows.Forms.ComboBox();
             this.blurLabel = new System.Windows.Forms.Label();
             this.blurTrackBar = new System.Windows.Forms.TrackBar();
+            this.markLabel = new System.Windows.Forms.Label();
+            this.markTrackBar = new System.Windows.Forms.TrackBar();
             this.convertPhotoButton = new System.Windows.Forms.Button();
             this.toolbarPanel.SuspendLayout();
             this.palettePanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.columnsNumericUpDown)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.rowsNumericUpDown)).BeginInit();
             ((System.ComponentModel.ISupportInitialize)(this.blurTrackBar)).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)(this.markTrackBar)).BeginInit();
             this.SuspendLayout();
             //
             // toolbarPanel
@@ -173,6 +180,12 @@ namespace PaintTranslator
             this.palettePanel.Controls.Add(this.paintsCheckedListBox);
             this.palettePanel.Controls.Add(this.selectAllCheckBox);
             this.palettePanel.Controls.Add(this.editPaletteButton);
+            this.palettePanel.Controls.Add(this.stylePanel);
+            this.palettePanel.Controls.Add(this.resetStyleButton);
+            this.palettePanel.Controls.Add(this.styleLabel);
+            this.palettePanel.Controls.Add(this.styleComboBox);
+            this.palettePanel.Controls.Add(this.markLabel);
+            this.palettePanel.Controls.Add(this.markTrackBar);
             this.palettePanel.Controls.Add(this.blurLabel);
             this.palettePanel.Controls.Add(this.blurTrackBar);
             this.palettePanel.Controls.Add(this.convertPhotoButton);
@@ -193,6 +206,28 @@ namespace PaintTranslator
             this.editPaletteButton.UseVisualStyleBackColor = true;
             this.editPaletteButton.Click += new System.EventHandler(this.EditPaletteButton_Click);
             //
+            // stylePanel
+            //
+            this.stylePanel.AutoScroll = true;
+            this.stylePanel.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.stylePanel.FlowDirection = System.Windows.Forms.FlowDirection.TopDown;
+            this.stylePanel.Location = new System.Drawing.Point(0, 254);
+            this.stylePanel.Name = "stylePanel";
+            this.stylePanel.Size = new System.Drawing.Size(250, 120);
+            this.stylePanel.TabIndex = 20;
+            this.stylePanel.WrapContents = false;
+            //
+            // resetStyleButton
+            //
+            this.resetStyleButton.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.resetStyleButton.Location = new System.Drawing.Point(0, 374);
+            this.resetStyleButton.Name = "resetStyleButton";
+            this.resetStyleButton.Size = new System.Drawing.Size(250, 28);
+            this.resetStyleButton.TabIndex = 21;
+            this.resetStyleButton.Text = "Reset to style defaults";
+            this.resetStyleButton.UseVisualStyleBackColor = true;
+            this.resetStyleButton.Click += new System.EventHandler(this.ResetStyleButton_Click);
+            //
             // selectAllCheckBox
             //
             this.selectAllCheckBox.Checked = true;
@@ -212,9 +247,9 @@ namespace PaintTranslator
             this.paintsCheckedListBox.CheckOnClick = true;
             this.paintsCheckedListBox.Dock = System.Windows.Forms.DockStyle.Fill;
             this.paintsCheckedListBox.IntegralHeight = false;
-            this.paintsCheckedListBox.Location = new System.Drawing.Point(0, 24);
+            this.paintsCheckedListBox.Location = new System.Drawing.Point(0, 52);
             this.paintsCheckedListBox.Name = "paintsCheckedListBox";
-            this.paintsCheckedListBox.Size = new System.Drawing.Size(250, 484);
+            this.paintsCheckedListBox.Size = new System.Drawing.Size(250, 202);
             this.paintsCheckedListBox.TabIndex = 11;
             this.paintsCheckedListBox.ItemCheck += new System.Windows.Forms.ItemCheckEventHandler(this.PaintsCheckedListBox_ItemCheck);
             //
@@ -241,6 +276,54 @@ namespace PaintTranslator
             this.blurTrackBar.TickFrequency = 2;
             this.blurTrackBar.Value = 2;
             this.blurTrackBar.ValueChanged += new System.EventHandler(this.BlurTrackBar_ValueChanged);
+            //
+            // styleLabel
+            //
+            this.styleLabel.AutoSize = false;
+            this.styleLabel.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.styleLabel.Location = new System.Drawing.Point(0, 402);
+            this.styleLabel.Name = "styleLabel";
+            this.styleLabel.Padding = new System.Windows.Forms.Padding(6, 0, 0, 0);
+            this.styleLabel.Size = new System.Drawing.Size(250, 20);
+            this.styleLabel.TabIndex = 18;
+            this.styleLabel.Text = "Style";
+            this.styleLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            //
+            // styleComboBox
+            //
+            this.styleComboBox.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.styleComboBox.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
+            this.styleComboBox.FormattingEnabled = true;
+            this.styleComboBox.Location = new System.Drawing.Point(0, 422);
+            this.styleComboBox.Name = "styleComboBox";
+            this.styleComboBox.Size = new System.Drawing.Size(250, 21);
+            this.styleComboBox.TabIndex = 19;
+            this.styleComboBox.SelectedIndexChanged += new System.EventHandler(this.StyleComboBox_SelectedIndexChanged);
+            //
+            // markLabel
+            //
+            this.markLabel.AutoSize = false;
+            this.markLabel.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.markLabel.Location = new System.Drawing.Point(0, 443);
+            this.markLabel.Name = "markLabel";
+            this.markLabel.Padding = new System.Windows.Forms.Padding(6, 0, 0, 0);
+            this.markLabel.Size = new System.Drawing.Size(250, 20);
+            this.markLabel.TabIndex = 16;
+            this.markLabel.Text = "Brush mark: 3 px";
+            this.markLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
+            //
+            // markTrackBar
+            //
+            this.markTrackBar.Dock = System.Windows.Forms.DockStyle.Bottom;
+            this.markTrackBar.Location = new System.Drawing.Point(0, 463);
+            this.markTrackBar.Minimum = 1;
+            this.markTrackBar.Maximum = 128;
+            this.markTrackBar.Name = "markTrackBar";
+            this.markTrackBar.Size = new System.Drawing.Size(250, 45);
+            this.markTrackBar.TabIndex = 17;
+            this.markTrackBar.TickFrequency = 16;
+            this.markTrackBar.Value = 3;
+            this.markTrackBar.ValueChanged += new System.EventHandler(this.MarkTrackBar_ValueChanged);
             //
             // convertPhotoButton
             //
@@ -274,6 +357,7 @@ namespace PaintTranslator
             ((System.ComponentModel.ISupportInitialize)(this.columnsNumericUpDown)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.rowsNumericUpDown)).EndInit();
             ((System.ComponentModel.ISupportInitialize)(this.blurTrackBar)).EndInit();
+            ((System.ComponentModel.ISupportInitialize)(this.markTrackBar)).EndInit();
             this.ResumeLayout(false);
         }
 
@@ -292,9 +376,15 @@ namespace PaintTranslator
         private System.Windows.Forms.Panel palettePanel;
         private System.Windows.Forms.CheckBox selectAllCheckBox;
         private System.Windows.Forms.Button editPaletteButton;
+        private System.Windows.Forms.FlowLayoutPanel stylePanel;
+        private System.Windows.Forms.Button resetStyleButton;
         private PaintTranslator.Controls.PaintCheckedListBox paintsCheckedListBox;
+        private System.Windows.Forms.Label styleLabel;
+        private System.Windows.Forms.ComboBox styleComboBox;
         private System.Windows.Forms.Label blurLabel;
         private System.Windows.Forms.TrackBar blurTrackBar;
+        private System.Windows.Forms.Label markLabel;
+        private System.Windows.Forms.TrackBar markTrackBar;
         private System.Windows.Forms.Button convertPhotoButton;
     }
 }

@@ -25,11 +25,6 @@ namespace PaintTranslator.Imaging
         // count proportional to the radius the caller asked for.
         private const double RadiusInSigmas = 3.0;
 
-        // Linear-light value of each of the 256 sRGB channel codes. The decode is a
-        // branch and a Pow per channel, which at three channels per pixel dwarfs the
-        // blur itself; there are only 256 possible inputs, so it is done once.
-        private static readonly float[] LinearFromSrgb = BuildLinearTable();
-
         /// <summary>
         /// Blurs a pixel buffer in place. Alpha is left untouched, and each color
         /// channel is blurred independently.
@@ -60,12 +55,12 @@ namespace PaintTranslator.Imaging
             var plane = new float[width * height];
             var scratch = new float[width * height];
 
-            for (int shift = 16; shift >= 0; shift -= 8)
+            for (int shift = LinearPlanes.RedShift; shift >= LinearPlanes.BlueShift; shift -= 8)
             {
-                ToLinearPlane(pixels, strideInts, width, height, shift, plane);
+                LinearPlanes.Decode(pixels, strideInts, width, height, shift, plane);
                 BlurHorizontal(plane, scratch, width, height, kernel, radius);
                 BlurVertical(scratch, plane, width, height, kernel, radius);
-                FromLinearPlane(plane, pixels, strideInts, width, height, shift);
+                LinearPlanes.Encode(plane, pixels, strideInts, width, height, shift);
             }
         }
 
@@ -98,57 +93,6 @@ namespace PaintTranslator.Imaging
             }
 
             return kernel;
-        }
-
-        /// <summary>
-        /// Decodes one color channel of the pixel buffer into a linear-light plane.
-        /// </summary>
-        /// <param name="pixels">The 32-bit ARGB pixels to read.</param>
-        /// <param name="strideInts">The number of ints per pixel row (stride / 4).</param>
-        /// <param name="width">The image width in pixels.</param>
-        /// <param name="height">The image height in pixels.</param>
-        /// <param name="shift">The channel's bit offset within a pixel: 16, 8, or 0.</param>
-        /// <param name="plane">The width-by-height plane to fill.</param>
-        private static void ToLinearPlane(int[] pixels, int strideInts, int width, int height, int shift, float[] plane)
-        {
-            Parallel.For(0, height, y =>
-            {
-                int source = y * strideInts;
-                int target = y * width;
-                for (int x = 0; x < width; x++)
-                {
-                    plane[target + x] = LinearFromSrgb[(pixels[source + x] >> shift) & 0xFF];
-                }
-            });
-        }
-
-        /// <summary>
-        /// Encodes a linear-light plane back into one color channel of the pixel
-        /// buffer, leaving the pixels' other channels and their alpha untouched.
-        /// </summary>
-        /// <param name="plane">The blurred width-by-height plane to read.</param>
-        /// <param name="pixels">The 32-bit ARGB pixels, modified in place.</param>
-        /// <param name="strideInts">The number of ints per pixel row (stride / 4).</param>
-        /// <param name="width">The image width in pixels.</param>
-        /// <param name="height">The image height in pixels.</param>
-        /// <param name="shift">The channel's bit offset within a pixel: 16, 8, or 0.</param>
-        private static void FromLinearPlane(float[] plane, int[] pixels, int strideInts, int width, int height, int shift)
-        {
-            int mask = ~(0xFF << shift);
-
-            Parallel.For(0, height, y =>
-            {
-                int source = y * width;
-                int target = y * strideInts;
-                for (int x = 0; x < width; x++)
-                {
-                    // A weighted mean of values in [0, 1] cannot leave [0, 1], so the clamp
-                    // is only guarding the last bit of floating-point slack at the extremes.
-                    double linear = Math.Clamp((double)plane[source + x], 0.0, 1.0);
-                    int channel = (int)Math.Round(ColorSpace.LinearToSrgb(linear) * 255.0);
-                    pixels[target + x] = (pixels[target + x] & mask) | (Math.Clamp(channel, 0, 255) << shift);
-                }
-            });
         }
 
         /// <summary>
@@ -220,21 +164,6 @@ namespace PaintTranslator.Imaging
                 return row;
             },
             _ => { });
-        }
-
-        /// <summary>
-        /// Tabulates the linear-light value of every 8-bit sRGB channel code.
-        /// </summary>
-        /// <returns>The 256 decoded values, indexed by channel code.</returns>
-        private static float[] BuildLinearTable()
-        {
-            var table = new float[256];
-            for (int code = 0; code < table.Length; code++)
-            {
-                table[code] = (float)ColorSpace.SrgbToLinear(code / 255.0);
-            }
-
-            return table;
         }
     }
 }

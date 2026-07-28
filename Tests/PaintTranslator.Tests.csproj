@@ -40,6 +40,11 @@
     <!-- HEIC is the one format the tests cannot generate: the Windows build of
          ImageMagick ships an HEVC decoder but no encoder. -->
     <None Update="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+    <!-- GoldenStyleTests compares against these at run time, so they must land
+         beside the test assembly; without this, a clean checkout has no Golden
+         folder in the output directory and every comparison fails on a missing
+         file rather than an actual pixel mismatch. -->
+    <None Update="Golden\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
-using System.Threading.Tasks;
+using PaintTranslator.Imaging.Styles;
+using PaintTranslator.Imaging.Styles.Stages;
 using PaintTranslator.Pigments;
 
 namespace PaintTranslator.Imaging
@@ -14,13 +13,40 @@ namespace PaintTranslator.Imaging
     /// the measured Kubelka-Munk kernel alone, in pairs along their whole mixing
     /// line, and in triples across their whole mixing triangle; each pixel is then
     /// replaced with the achievable color nearest to it in CIELAB space, so
-    /// "closest" matches human perception rather than raw RGB distance. The photo
-    /// can optionally be Gaussian-blurred first, which smooths away the sensor noise
-    /// and fine detail that no brush is going to reproduce, so the mapping settles
-    /// on larger flat regions instead of speckling between neighboring mixtures.
-    /// Blurring belongs before the mapping and not after it: averaging two mapped
-    /// pixels together produces a color partway between two mixtures, which is not
-    /// itself a color the paints can be mixed to.
+    /// "closest" matches human perception rather than raw RGB distance.
+    /// <para>
+    /// The invariant is that every emitted pixel is a color the paints can genuinely
+    /// be mixed to. The operative question for any new step is narrower than "does it
+    /// run before the mapping": it is <em>can this synthesise a color outside the
+    /// candidate set?</em> Operations before the mapping are always safe. So are
+    /// operations after it that only ever <em>select</em> an existing candidate —
+    /// modal filters, dithering, hard-edged fills, nearest-neighbour resampling.
+    /// What breaks the invariant is post-mapping <em>arithmetic</em>: averaging two
+    /// mapped pixels yields a color partway between two mixtures, which is not itself
+    /// mixable. Re-running the mapping repairs that cheaply, since it is cached per
+    /// distinct quantized color. An earlier version of this comment said only "blur
+    /// before mapping", which forbids several operations that are in fact safe.
+    /// </para>
+    /// <para>
+    /// A second invariant — every output <em>region</em> should be large enough for a
+    /// brush to have made it — is what the mandatory pre-map floor every style
+    /// pipeline includes exists to pursue, not a guarantee it delivers for every
+    /// registered style. Mapping each pixel independently amplifies input noise —
+    /// measured at 1.7x, and enough to put 44% of pixels into regions of four pixels
+    /// or fewer on a photo with ordinary sensor noise — so an edge-preserving filter
+    /// always runs before the mapping, whatever the caller passes for
+    /// <c>blurRadius</c>, and it keeps every registered style far clear of that
+    /// catastrophic case. But the floor's strength is one of five slider-adjustable
+    /// parameters a style declares, and a style with a large <c>MarkScale</c> and no
+    /// matching floor override can still land above a given fragmentation bar:
+    /// measured on the sigma-3 noisy gradient at slider 0, Fauvism (floor strength at
+    /// its stage's own weakest default) and Abstract (floor strength already at its
+    /// parameter's maximum, outrun by <c>MarkScale</c> 2.5) both exceed 5% of pixels
+    /// in sub-mark regions while the other three registered styles stay under 3%. See
+    /// <c>StyleBehaviourTests.EveryRegisteredStyleIsPaintable</c>, which pins a
+    /// baseline per style rather than one shared bar, <see cref="PaintabilityMetrics"/>,
+    /// <see cref="GuidedFilter"/> and <see cref="Styles.Stages.EdgePreservingFloor"/>.
+    /// </para>
     /// <para>
     /// The proportions are sampled as continuous shares rather than a few fixed
     /// ratios. Because the output is an 8-bit image and identical colors are
@@ -32,254 +58,21 @@ namespace PaintTranslator.Imaging
     /// </summary>
     public static class PalettePhotoConverter
     {
-        // Pixels are cached by their color quantized to 6 bits per channel: fine
-        // enough that the 4-step rounding is invisible next to the snapping onto
-        // the discrete mixture gamut, while capping the cache at 2^18 entries.
-        private const int BitsPerChannel = 6;
-
-        // Number of distinct cache keys: (2^6)^3 quantized colors.
-        private const int CacheSize = 1 << (3 * BitsPerChannel);
-
-        // How many interior points each two-paint mixing line is sampled at. Endpoints
-        // are covered by the single-paint entries.
-        //
-        // Sampling the proportions continuously is the point: a mixing line is not
-        // traversed at a constant rate, because the colour moves fastest where the
-        // stronger pigment is scarce, and a handful of fixed ratios lands nowhere near
-        // the closest reachable colour there. Measured against colours drawn from real
-        // mixtures, going from the eight-step ladder this replaced to 63 samples cuts
-        // mean sampling error from 2.05 to 0.91 and worst case from 17.6 to 9.3. Past
-        // this the line is saturated — 255 samples reach only 0.83, and 511 only 0.82 —
-        // because neighbouring samples then differ by less than one 8-bit code and
-        // collapse together in the deduplication below.
-        private const int PairSamples = 63;
-
-        // The denominator of the simplex grid each three-paint mixing triangle is
-        // sampled on, so shares are whole multiples of 1/16 and the interior holds 105
-        // points. Edges of the triangle are covered by the pair samples.
-        //
-        // The triangles are where the accuracy is: holding pairs at 63 samples, taking
-        // this from 6 to 10 to 16 moves mean error 0.91 to 0.60 to 0.41, while doubling
-        // it again to 24 buys only 0.27 for four times the candidates and twice the
-        // build. Interior colours are also the muted ones a photograph is mostly made
-        // of, which is why they earn a finer grid than intuition suggests.
-        private const int TripleDivisions = 16;
-
-        // Average candidates per grid cell. Cells are cheap to skip and expensive to
-        // over-fill, but too fine a grid spends the whole query walking empty shells,
-        // so a couple of candidates per occupied cell balances the two.
-        private const double CandidatesPerCell = 2.0;
-
-        // The most cells the index will use along any one axis, which bounds its memory
-        // at this cubed regardless of how many candidates were sampled.
-        private const int MaximumCellsPerAxis = 64;
-
         /// <summary>
-        /// Holds the sampled achievable-gamut colors: the sRGB value of each mixture
-        /// alongside its precomputed CIELAB coordinates, indexed by a uniform grid over
-        /// CIELAB so a nearest-color query examines only the cells near the target.
-        /// <para>
-        /// A grid rather than the sort by L* this replaced. Sorting on one axis prunes
-        /// only by that axis, so its cost grows with the number of candidates sharing a
-        /// lightness; sampling the mixing proportions finely enough to matter puts tens
-        /// of thousands of colors in that band and the scan comes to dominate a
-        /// conversion. The grid prunes on all three axes at once, which is what lets the
-        /// sampling get dense without the conversion getting slow.
-        /// </para>
+        /// The window radius the mandatory pre-map filter runs at for a given mark size.
         /// </summary>
-        private sealed class CandidateSet
+        /// <param name="markPixels">One brushmark's width in pixels.</param>
+        /// <returns>The guided-filter radius, never below one.</returns>
+        /// <remarks>
+        /// Half a mark, because a filter window wider than the mark itself would erase
+        /// features the mark is meant to be able to render, while a narrower one leaves
+        /// noise the mapping then amplifies. Never zero: a radius of zero is the
+        /// unfiltered case, which puts 44% of a noisy photograph's pixels into regions
+        /// of four pixels or fewer.
+        /// </remarks>
+        internal static int FloorRadius(double markPixels)
         {
-            /// <summary>
-            /// Initializes a new instance of the <see cref="CandidateSet"/> class,
-            /// building the grid index over the given candidates.
-            /// </summary>
-            /// <param name="argb">The 32-bit ARGB value of each candidate color.</param>
-            /// <param name="l">The CIELAB L* of each candidate, index-aligned with <paramref name="argb"/>.</param>
-            /// <param name="a">The CIELAB a* of each candidate, index-aligned with <paramref name="argb"/>.</param>
-            /// <param name="b">The CIELAB b* of each candidate, index-aligned with <paramref name="argb"/>.</param>
-            public CandidateSet(int[] argb, double[] l, double[] a, double[] b)
-            {
-                Argb = argb;
-                L = l;
-                A = a;
-                B = b;
-
-                // The occupied region of CIELAB is far smaller than the space itself —
-                // no paint mixture is a saturated cyan — so the grid is fitted to the
-                // candidates rather than to the axes' nominal ranges.
-                MinL = Minimum(l);
-                MinA = Minimum(a);
-                MinB = Minimum(b);
-                double spanL = Math.Max(Maximum(l) - MinL, 1e-6);
-                double spanA = Math.Max(Maximum(a) - MinA, 1e-6);
-                double spanB = Math.Max(Maximum(b) - MinB, 1e-6);
-
-                int perAxis = (int)Math.Cbrt(Math.Max(argb.Length / CandidatesPerCell, 1.0));
-                CellsPerAxis = Math.Clamp(perAxis, 1, MaximumCellsPerAxis);
-
-                CellL = spanL / CellsPerAxis;
-                CellA = spanA / CellsPerAxis;
-                CellB = spanB / CellsPerAxis;
-                SmallestCell = Math.Min(CellL, Math.Min(CellA, CellB));
-
-                // Counting sort into compressed rows: one pass to size each cell, a
-                // prefix sum for the offsets, then a pass to place the members. This
-                // keeps the whole index in two flat arrays with no per-cell allocation.
-                int cellCount = CellsPerAxis * CellsPerAxis * CellsPerAxis;
-                CellStart = new int[cellCount + 1];
-                Members = new int[argb.Length];
-
-                var cellOf = new int[argb.Length];
-                for (int i = 0; i < argb.Length; i++)
-                {
-                    cellOf[i] = CellIndex(l[i], a[i], b[i]);
-                    CellStart[cellOf[i] + 1]++;
-                }
-
-                for (int cell = 0; cell < cellCount; cell++)
-                {
-                    CellStart[cell + 1] += CellStart[cell];
-                }
-
-                var cursor = new int[cellCount];
-                for (int i = 0; i < argb.Length; i++)
-                {
-                    int cell = cellOf[i];
-                    Members[CellStart[cell] + cursor[cell]] = i;
-                    cursor[cell]++;
-                }
-            }
-
-            /// <summary>
-            /// Gets the 32-bit ARGB value of each candidate color.
-            /// </summary>
-            public int[] Argb { get; }
-
-            /// <summary>
-            /// Gets the CIELAB L* component of each candidate.
-            /// </summary>
-            public double[] L { get; }
-
-            /// <summary>
-            /// Gets the CIELAB a* component of each candidate.
-            /// </summary>
-            public double[] A { get; }
-
-            /// <summary>
-            /// Gets the CIELAB b* component of each candidate.
-            /// </summary>
-            public double[] B { get; }
-
-            /// <summary>Gets how many cells the grid spans along each axis.</summary>
-            public int CellsPerAxis { get; }
-
-            /// <summary>Gets the L* of the grid's lower corner.</summary>
-            public double MinL { get; }
-
-            /// <summary>Gets the a* of the grid's lower corner.</summary>
-            public double MinA { get; }
-
-            /// <summary>Gets the b* of the grid's lower corner.</summary>
-            public double MinB { get; }
-
-            /// <summary>Gets one cell's extent along L*.</summary>
-            public double CellL { get; }
-
-            /// <summary>Gets one cell's extent along a*.</summary>
-            public double CellA { get; }
-
-            /// <summary>Gets one cell's extent along b*.</summary>
-            public double CellB { get; }
-
-            /// <summary>
-            /// Gets the shortest of the three cell extents, which is what bounds how
-            /// close a candidate in a distant shell could possibly be.
-            /// </summary>
-            public double SmallestCell { get; }
-
-            /// <summary>
-            /// Gets each cell's first offset into <see cref="Members"/>, with one extra
-            /// entry at the end so a cell's extent is always the next offset minus its own.
-            /// </summary>
-            public int[] CellStart { get; }
-
-            /// <summary>
-            /// Gets the candidate indices ordered so that each cell's members are
-            /// contiguous.
-            /// </summary>
-            public int[] Members { get; }
-
-            /// <summary>
-            /// Finds the grid cell a CIELAB color falls in.
-            /// </summary>
-            /// <param name="labL">The color's L*.</param>
-            /// <param name="labA">The color's a*.</param>
-            /// <param name="labB">The color's b*.</param>
-            /// <returns>The flattened cell index.</returns>
-            public int CellIndex(double labL, double labA, double labB)
-            {
-                return Flatten(
-                    AxisCell(labL, MinL, CellL),
-                    AxisCell(labA, MinA, CellA),
-                    AxisCell(labB, MinB, CellB));
-            }
-
-            /// <summary>
-            /// Flattens a cell's three axis coordinates into a single index.
-            /// </summary>
-            /// <param name="cellL">The cell's coordinate along L*.</param>
-            /// <param name="cellA">The cell's coordinate along a*.</param>
-            /// <param name="cellB">The cell's coordinate along b*.</param>
-            /// <returns>The flattened cell index.</returns>
-            public int Flatten(int cellL, int cellA, int cellB)
-            {
-                return ((cellL * CellsPerAxis) + cellA) * CellsPerAxis + cellB;
-            }
-
-            /// <summary>
-            /// Locates a value's cell along one axis, clamped so colors outside the
-            /// sampled region fall into the nearest edge cell rather than off the grid.
-            /// </summary>
-            /// <param name="value">The coordinate value.</param>
-            /// <param name="minimum">The axis's lower bound.</param>
-            /// <param name="cell">The axis's cell extent.</param>
-            /// <returns>The cell coordinate along that axis.</returns>
-            public int AxisCell(double value, double minimum, double cell)
-            {
-                return Math.Clamp((int)((value - minimum) / cell), 0, CellsPerAxis - 1);
-            }
-
-            /// <summary>
-            /// Finds the smallest value in an array.
-            /// </summary>
-            /// <param name="values">The values to scan.</param>
-            /// <returns>The smallest value, or zero when the array is empty.</returns>
-            private static double Minimum(double[] values)
-            {
-                double smallest = values.Length == 0 ? 0.0 : values[0];
-                foreach (double value in values)
-                {
-                    smallest = Math.Min(smallest, value);
-                }
-
-                return smallest;
-            }
-
-            /// <summary>
-            /// Finds the largest value in an array.
-            /// </summary>
-            /// <param name="values">The values to scan.</param>
-            /// <returns>The largest value, or zero when the array is empty.</returns>
-            private static double Maximum(double[] values)
-            {
-                double largest = values.Length == 0 ? 0.0 : values[0];
-                foreach (double value in values)
-                {
-                    largest = Math.Max(largest, value);
-                }
-
-                return largest;
-            }
+            return Math.Max((int)Math.Round(markPixels / 2.0), 1);
         }
 
         /// <summary>
@@ -289,13 +82,78 @@ namespace PaintTranslator.Imaging
         /// </summary>
         /// <param name="source">The photo to convert; it is not modified.</param>
         /// <param name="paints">The paints available for mixing.</param>
-        /// <param name="blurRadius">The radius, in pixels, of the Gaussian blur applied
-        /// to the photo before it is mapped, which trades fine detail for larger flat
-        /// regions. Zero maps the photo exactly as it arrived.</param>
+        /// <param name="blurRadius">The radius, in pixels, of an additional Gaussian
+        /// blur to run after the mandatory pre-map floor, for a caller who wants more
+        /// simplification than the floor alone provides. Zero adds no further blur —
+        /// it does not mean an unfiltered pass, since the floor runs regardless of
+        /// this value.</param>
+        /// <param name="markPixels">One brushmark's width in pixels, which sets how
+        /// strongly the mandatory pre-map filter runs. Zero or less derives it from the
+        /// image's own dimensions.</param>
         /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/> or <paramref name="paints"/> is null.</exception>
         /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
-        public static Bitmap Convert(Bitmap source, IReadOnlyList<PigmentCoefficients> paints, int blurRadius = 0)
+        /// <remarks>
+        /// Delegates to the <see cref="StyleDefinition"/> overload with
+        /// <see cref="StyleRegistry.Default"/>, so a caller with no style of its own to
+        /// offer — every caller that predates the style picker — gets exactly the
+        /// behaviour this converter always had, from the one place that behaviour is
+        /// defined rather than a second copy of it kept in sync by hand.
+        /// </remarks>
+        public static Bitmap Convert(
+            Bitmap source,
+            IReadOnlyList<PigmentCoefficients> paints,
+            int blurRadius = 0,
+            int markPixels = 0)
+        {
+            return Convert(source, paints, StyleRegistry.Default, blurRadius, markPixels);
+        }
+
+        /// <summary>
+        /// Converts a photo through a caller-chosen style, so every pixel uses only
+        /// colors achievable by mixing the given paints, choosing the perceptually
+        /// nearest achievable color for each pixel. Alpha is preserved from the source.
+        /// </summary>
+        /// <param name="source">The photo to convert; it is not modified.</param>
+        /// <param name="paints">The paints available for mixing.</param>
+        /// <param name="style">The style whose stages define the mapping.</param>
+        /// <param name="blurRadius">The radius, in pixels, of an additional Gaussian
+        /// blur to run after the mandatory pre-map floor, for a caller who wants more
+        /// simplification than the floor alone provides. Zero adds no further blur —
+        /// it does not mean an unfiltered pass, since the floor runs regardless of
+        /// this value.</param>
+        /// <param name="markPixels">One brushmark's width in pixels, which sets how
+        /// strongly the mandatory pre-map filter runs. Zero or less derives it from the
+        /// image's own dimensions.</param>
+        /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
+        /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/>,
+        /// <paramref name="paints"/> or <paramref name="style"/> is null.</exception>
+        /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
+        /// <remarks>
+        /// Internal rather than public: <see cref="StyleDefinition"/> is itself internal,
+        /// and a public method cannot expose an internal type through its signature. The
+        /// style picker that supplies <paramref name="style"/> lives in <c>MainForm</c>,
+        /// in the same assembly, so internal visibility is all it needs.
+        /// <para>
+        /// Delegates to <see cref="StylePipeline.Render"/> rather than running its own
+        /// mapping, so behaviour is defined by <paramref name="style"/>'s stages alone
+        /// and not a second implementation that could drift from them. The
+        /// <paramref name="blurRadius"/> parameter predates the style pipeline and has
+        /// no fixed slot of its own in <see cref="StyleDefinition"/>, so it is composed
+        /// onto <paramref name="style"/> by <see cref="ComposeWithBlur"/> — the same
+        /// helper <c>MainForm</c>'s convert button uses — rather than by logic kept
+        /// here as well. This caller has no pre-existing values dictionary of its own,
+        /// so it hands <see cref="ComposeWithBlur"/> a fresh
+        /// <see cref="StylePipeline.DefaultValues"/> for <paramref name="style"/> to
+        /// compose the blur stage's values onto.
+        /// </para>
+        /// </remarks>
+        internal static Bitmap Convert(
+            Bitmap source,
+            IReadOnlyList<PigmentCoefficients> paints,
+            StyleDefinition style,
+            int blurRadius = 0,
+            int markPixels = 0)
         {
             if (source == null)
             {
@@ -309,101 +167,85 @@ namespace PaintTranslator.Imaging
             {
                 throw new ArgumentException("At least one paint is required.", nameof(paints));
             }
-
-            CandidateSet candidates = BuildCandidates(paints);
-
-            int width = source.Width;
-            int height = source.Height;
-
-            // Drawing into a fresh 32bpp ARGB bitmap normalizes whatever pixel
-            // format the photo arrived in, so the buffer below is always ARGB.
-            var result = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            using (var graphics = Graphics.FromImage(result))
+            if (style == null)
             {
-                graphics.DrawImage(source, 0, 0, width, height);
+                throw new ArgumentNullException(nameof(style));
             }
 
-            BitmapData data = result.LockBits(
-                new Rectangle(0, 0, width, height),
-                ImageLockMode.ReadWrite,
-                PixelFormat.Format32bppArgb);
+            (StyleDefinition renderStyle, IReadOnlyDictionary<IPipelineStage, ParameterValues> values) =
+                ComposeWithBlur(style, StylePipeline.DefaultValues(style), blurRadius);
 
-            try
-            {
-                int strideInts = data.Stride / 4;
-                var pixels = new int[strideInts * height];
-                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-
-                // Smoothing first means the mapping sees the softened photo, so every
-                // color it emits is still one the paints can actually be mixed to.
-                GaussianBlur.Apply(pixels, strideInts, width, height, blurRadius);
-                MapPixelsFlat(pixels, strideInts, width, height, candidates);
-
-                Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
-            }
-            finally
-            {
-                result.UnlockBits(data);
-            }
-
-            return result;
+            return StylePipeline.Render(source, paints, renderStyle, markPixels, values);
         }
 
         /// <summary>
-        /// Replaces each pixel's RGB with the nearest achievable color, mapping
-        /// every pixel independently so identical colors always land on the same
-        /// mixture. Alpha is left untouched.
+        /// Composes a style and a values dictionary with an optional appended
+        /// <see cref="Styles.Stages.OptionalBlur"/> pre-map stage, so this legacy
+        /// <c>blurRadius</c> knob and a caller's own live parameter values can be
+        /// combined without either caller re-deriving the composition itself.
+        /// Shared by <see cref="Convert(Bitmap, IReadOnlyList{PigmentCoefficients}, StyleDefinition, int, int)"/>
+        /// and <c>MainForm</c>'s convert button — the two places a
+        /// <c>blurRadius</c> slider value meets a style's stages — so the blur
+        /// stage's placement after the mandatory floor (see
+        /// <see cref="Styles.Stages.OptionalBlur"/> for why the two do not
+        /// commute) is defined once rather than kept in sync by hand between them.
         /// </summary>
-        /// <param name="pixels">The image's ARGB pixels, modified in place.</param>
-        /// <param name="strideInts">The number of ints per pixel row (stride / 4).</param>
-        /// <param name="width">The image width in pixels.</param>
-        /// <param name="height">The image height in pixels.</param>
-        /// <param name="candidates">The achievable-gamut colors, sorted by L*.</param>
-        private static void MapPixelsFlat(int[] pixels, int strideInts, int width, int height, CandidateSet candidates)
+        /// <param name="style">The style to render with. Not modified: appending
+        /// the blur stage returns a new <see cref="StyleDefinition"/> rather than
+        /// mutating this one, since <c>MainForm</c> hands in the very style
+        /// instance it keeps reusing across conversions.</param>
+        /// <param name="values">Each of <paramref name="style"/>'s stages, mapped
+        /// to the parameter values it should render with. Not modified:
+        /// <c>MainForm</c> keeps one dictionary per style for the lifetime of a
+        /// session, so mutating it here would leave a blur-stage entry behind
+        /// that accumulates — and leaks into a subsequent conversion — the next
+        /// time this same dictionary was composed with a different (or zero)
+        /// blur radius.</param>
+        /// <param name="blurRadius">The radius, in pixels, of the blur to
+        /// append, or zero (or less) to add none.</param>
+        /// <returns><paramref name="style"/> and <paramref name="values"/>
+        /// unchanged when <paramref name="blurRadius"/> is zero or less;
+        /// otherwise a style with a fresh <see cref="Styles.Stages.OptionalBlur"/>
+        /// appended to its <see cref="StyleDefinition.PreMap"/>, paired with a
+        /// new dictionary holding a copy of <paramref name="values"/> plus that
+        /// stage's own default-seeded entry with its radius set.</returns>
+        internal static (StyleDefinition Style, IReadOnlyDictionary<IPipelineStage, ParameterValues> Values) ComposeWithBlur(
+            StyleDefinition style,
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
+            int blurRadius)
         {
-            // First pass: mark which quantized colors actually occur, so the
-            // expensive nearest-candidate search runs once per distinct color
-            // instead of once per pixel.
-            var used = new bool[CacheSize];
-            for (int y = 0; y < height; y++)
+            if (blurRadius <= 0)
             {
-                int row = y * strideInts;
-                for (int x = 0; x < width; x++)
-                {
-                    used[CacheKey(pixels[row + x])] = true;
-                }
+                return (style, values);
             }
 
-            var keys = new List<int>();
-            for (int key = 0; key < CacheSize; key++)
+            var blur = new OptionalBlur();
+            StyleDefinition blurredStyle = style with { PreMap = AppendStage(style.PreMap, blur) };
+
+            var blurValues = new ParameterValues(blur.Parameters);
+            blurValues.Set("radius", blurRadius);
+
+            var composedValues = new Dictionary<IPipelineStage, ParameterValues>(values) { [blur] = blurValues };
+
+            return (blurredStyle, composedValues);
+        }
+
+        /// <summary>
+        /// Copies a pre-map stage list with one more stage appended at the end.
+        /// </summary>
+        /// <param name="stages">The stages to copy, in order.</param>
+        /// <param name="stage">The stage to append after all of <paramref name="stages"/>.</param>
+        /// <returns>A new list holding <paramref name="stages"/> followed by <paramref name="stage"/>.</returns>
+        private static IReadOnlyList<IPreMapStage> AppendStage(IReadOnlyList<IPreMapStage> stages, IPreMapStage stage)
+        {
+            var appended = new IPreMapStage[stages.Count + 1];
+            for (int i = 0; i < stages.Count; i++)
             {
-                if (used[key])
-                {
-                    keys.Add(key);
-                }
+                appended[i] = stages[i];
             }
 
-            // Resolve every distinct color in parallel; each entry is written
-            // by exactly one iteration, so the shared array needs no locking.
-            var mapped = new int[CacheSize];
-            Parallel.For(0, keys.Count, i =>
-            {
-                int key = keys[i];
-                mapped[key] = NearestCandidateArgb(candidates, key);
-            });
-
-            // Second pass: swap each pixel's RGB for its mapped mixture while
-            // keeping the pixel's own alpha.
-            for (int y = 0; y < height; y++)
-            {
-                int row = y * strideInts;
-                for (int x = 0; x < width; x++)
-                {
-                    int pixel = pixels[row + x];
-                    int alpha = pixel & unchecked((int)0xFF000000);
-                    pixels[row + x] = alpha | (mapped[CacheKey(pixel)] & 0x00FFFFFF);
-                }
-            }
+            appended[stages.Count] = stage;
+            return appended;
         }
 
         /// <summary>
@@ -412,129 +254,19 @@ namespace PaintTranslator.Imaging
         /// whole mixing triangle, all blended subtractively. Duplicate resulting colors
         /// are collapsed, which is what keeps the search set finite however finely the
         /// proportions are sampled.
+        /// <para>
+        /// Delegates to <see cref="MixtureBuilder"/>, which owns this enumeration so a
+        /// style can apply the same two controlled mutations
+        /// (<see cref="MixtureBuilder.BlendInto"/>, <see cref="MixtureBuilder.KeepOnly"/>)
+        /// on top of it. An unmodified builder samples exactly what this method always
+        /// has, which is what keeps a converted photo with no style applied unchanged.
+        /// </para>
         /// </summary>
         /// <param name="paints">The available paints.</param>
         /// <returns>The deduplicated candidate colors, indexed for nearest-color search.</returns>
         private static CandidateSet BuildCandidates(IReadOnlyList<PigmentCoefficients> paints)
         {
-            int count = paints.Count;
-
-            // Enumerating the subsets up front turns three nested loops into two flat
-            // lists that can be walked in parallel. Every mixture is independent of
-            // every other, so the only thing serialising this was the shared duplicate
-            // set — and deduplicating once at the end is cheaper than sharing it.
-            var pairs = new List<(int First, int Second)>();
-            var triples = new List<(int First, int Second, int Third)>();
-            for (int i = 0; i < count; i++)
-            {
-                for (int j = i + 1; j < count; j++)
-                {
-                    pairs.Add((i, j));
-                    for (int k = j + 1; k < count; k++)
-                    {
-                        triples.Add((i, j, k));
-                    }
-                }
-            }
-
-            int perTriple = TripleDivisions <= 1 ? 0 : (TripleDivisions - 1) * (TripleDivisions - 2) / 2;
-            int pairBase = count;
-            int tripleBase = pairBase + (pairs.Count * PairSamples);
-            var sampled = new int[tripleBase + (triples.Count * perTriple)];
-
-            // Each paint straight from the tube. A paint has no stored colour any more,
-            // so even the unmixed swatch is the kernel evaluated at full concentration.
-            Parallel.For(0, count, () => new double[SpectralBands.Count], (i, state, reflectance) =>
-            {
-                KubelkaMunk.Mix(new[] { paints[i] }, new[] { 1.0 }, reflectance);
-                sampled[i] = SpectralRenderer.ToDisplayColor(reflectance, out _).ToArgb();
-
-                return reflectance;
-            },
-            _ => { });
-
-            // Every unordered pair, sampled along its mixing line.
-            Parallel.For(0, pairs.Count, () => new double[SpectralBands.Count], (p, state, reflectance) =>
-            {
-                (int first, int second) = pairs[p];
-                var subset = new[] { paints[first], paints[second] };
-                var shares = new double[2];
-                int at = pairBase + (p * PairSamples);
-
-                for (int sample = 1; sample <= PairSamples; sample++)
-                {
-                    double share = (double)sample / (PairSamples + 1);
-                    shares[0] = 1.0 - share;
-                    shares[1] = share;
-
-                    KubelkaMunk.Mix(subset, shares, reflectance);
-                    sampled[at] = SpectralRenderer.ToDisplayColor(reflectance, out _).ToArgb();
-                    at++;
-                }
-
-                return reflectance;
-            },
-            _ => { });
-
-            // Every unordered triple, sampled on a regular grid across the interior of
-            // its mixing triangle. Combined with the pair samples this leaves the
-            // achievable gamut covered closely enough that the residual is below what
-            // an 8-bit channel can express over most of it.
-            Parallel.For(0, triples.Count, () => new double[SpectralBands.Count], (t, state, reflectance) =>
-            {
-                (int first, int second, int third) = triples[t];
-                var subset = new[] { paints[first], paints[second], paints[third] };
-                var shares = new double[3];
-                int at = tripleBase + (t * perTriple);
-
-                // Both loops stop short of the boundary, so every point has all three
-                // paints present; the boundary is covered by the pair samples above.
-                for (int x = 1; x < TripleDivisions; x++)
-                {
-                    for (int y = 1; y < TripleDivisions - x; y++)
-                    {
-                        shares[0] = (double)x / TripleDivisions;
-                        shares[1] = (double)y / TripleDivisions;
-                        shares[2] = 1.0 - shares[0] - shares[1];
-
-                        KubelkaMunk.Mix(subset, shares, reflectance);
-                        sampled[at] = SpectralRenderer.ToDisplayColor(reflectance, out _).ToArgb();
-                        at++;
-                    }
-                }
-
-                return reflectance;
-            },
-            _ => { });
-
-            // Collapse the duplicates. Sampling finely enough to matter produces far more
-            // mixtures than there are distinct 8-bit colours for them to land on, so most
-            // of what was just computed collapses away here.
-            var seen = new HashSet<int>(sampled.Length);
-            var argbs = new List<int>();
-            foreach (int argb in sampled)
-            {
-                if (seen.Add(argb))
-                {
-                    argbs.Add(argb);
-                }
-            }
-
-            // Precompute CIELAB for every surviving candidate so the per-pixel
-            // search is pure arithmetic over flat arrays.
-            var argbArray = argbs.ToArray();
-            var l = new double[argbArray.Length];
-            var a = new double[argbArray.Length];
-            var b = new double[argbArray.Length];
-            for (int i = 0; i < argbArray.Length; i++)
-            {
-                int argb = argbArray[i];
-                RgbToLab((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, out l[i], out a[i], out b[i]);
-            }
-
-            // The candidates need no ordering of their own: the set indexes them by
-            // position in CIELAB as it is constructed.
-            return new CandidateSet(argbArray, l, a, b);
+            return new MixtureBuilder(paints).Build();
         }
 
         /// <summary>
@@ -564,7 +296,7 @@ namespace PaintTranslator.Imaging
             var mapped = new int[targets.Length];
             for (int i = 0; i < targets.Length; i++)
             {
-                mapped[i] = NearestCandidateArgb(candidates, CacheKey(targets[i]));
+                mapped[i] = NearestCandidateArgb(candidates, ColorQuantization.Key(targets[i]));
             }
 
             return mapped;
@@ -572,135 +304,25 @@ namespace PaintTranslator.Imaging
 
         /// <summary>
         /// Finds the candidate color perceptually nearest (squared CIELAB distance) to a
-        /// quantized source color, by walking the grid outward from the target's own cell
-        /// in cubic shells and stopping once no unexamined cell could hold anything closer.
+        /// quantized source color, by delegating to the grid-shell search
+        /// <see cref="NearestQuantiser"/> runs for the style pipeline's own nearest-match
+        /// stage — the same search rather than a second copy of it, so this surface and
+        /// the pipeline's cannot silently disagree about which candidate is closest.
         /// </summary>
         /// <param name="candidates">The achievable-gamut colors to search.</param>
-        /// <param name="cacheKey">The quantized-color cache key identifying the source color.</param>
+        /// <param name="cacheKey">The quantized-color cache key identifying the source color, from
+        /// <see cref="ColorQuantization"/> — the one quantization scheme both this class and
+        /// <see cref="StylePipeline"/> use, so the two can never disagree about which bin a
+        /// color falls in.</param>
         /// <returns>The ARGB value of the nearest candidate.</returns>
         private static int NearestCandidateArgb(CandidateSet candidates, int cacheKey)
         {
-            // Reconstruct the center of the quantization bin the key represents,
-            // so the rounding error is split evenly instead of biased downward.
-            int r = (((cacheKey >> (2 * BitsPerChannel)) & 0x3F) << 2) + 2;
-            int g = (((cacheKey >> BitsPerChannel) & 0x3F) << 2) + 2;
-            int b = ((cacheKey & 0x3F) << 2) + 2;
+            ColorQuantization.KeyToRgb(cacheKey, out int r, out int g, out int b);
 
             RgbToLab(r, g, b, out double targetL, out double targetA, out double targetB);
 
-            double[] candL = candidates.L;
-            double[] candA = candidates.A;
-            double[] candB = candidates.B;
-            int[] cellStart = candidates.CellStart;
-            int[] members = candidates.Members;
-            int perAxis = candidates.CellsPerAxis;
-
-            int homeL = candidates.AxisCell(targetL, candidates.MinL, candidates.CellL);
-            int homeA = candidates.AxisCell(targetA, candidates.MinA, candidates.CellA);
-            int homeB = candidates.AxisCell(targetB, candidates.MinB, candidates.CellB);
-
-            double bestDistance = double.MaxValue;
-            int bestIndex = 0;
-
-            // Scans one cell's members. A local function so the shell walk above can stay
-            // about which cells to visit rather than repeating the distance test at each
-            // of the places it decides to visit one.
-            void Examine(int cell)
-            {
-                int end = cellStart[cell + 1];
-                for (int slot = cellStart[cell]; slot < end; slot++)
-                {
-                    int i = members[slot];
-                    double dl = candL[i] - targetL;
-                    double da = candA[i] - targetA;
-                    double db = candB[i] - targetB;
-                    double distance = (dl * dl) + (da * da) + (db * db);
-                    if (distance < bestDistance)
-                    {
-                        bestDistance = distance;
-                        bestIndex = i;
-                    }
-                }
-            }
-
-            for (int shell = 0; shell < perAxis; shell++)
-            {
-                // The target sits somewhere inside its own cell, so a cell this many
-                // steps away has its nearest face at least one step less than that.
-                // Once even that lower bound beats nothing, no further shell can.
-                if (shell > 0)
-                {
-                    double reach = (shell - 1) * candidates.SmallestCell;
-                    if (reach > 0.0 && reach * reach >= bestDistance)
-                    {
-                        break;
-                    }
-                }
-
-                int lowL = Math.Max(homeL - shell, 0);
-                int highL = Math.Min(homeL + shell, perAxis - 1);
-                int lowA = Math.Max(homeA - shell, 0);
-                int highA = Math.Min(homeA + shell, perAxis - 1);
-                int lowB = Math.Max(homeB - shell, 0);
-                int highB = Math.Min(homeB + shell, perAxis - 1);
-
-                for (int cellL = lowL; cellL <= highL; cellL++)
-                {
-                    bool edgeL = Math.Abs(cellL - homeL) == shell;
-                    for (int cellA = lowA; cellA <= highA; cellA++)
-                    {
-                        bool edgeA = Math.Abs(cellA - homeA) == shell;
-
-                        // Only the cube's surface is new; its interior belongs to shells
-                        // already walked. When neither of the first two axes is on the
-                        // surface the third has to be, so that row reduces to its two
-                        // end cells — visited explicitly, because clamping at the grid's
-                        // border makes striding the row unsound.
-                        if (edgeL || edgeA)
-                        {
-                            for (int cellB = lowB; cellB <= highB; cellB++)
-                            {
-                                Examine(candidates.Flatten(cellL, cellA, cellB));
-                            }
-
-                            continue;
-                        }
-
-                        if (homeB - shell >= 0)
-                        {
-                            Examine(candidates.Flatten(cellL, cellA, homeB - shell));
-                        }
-                        if (shell > 0 && homeB + shell < perAxis)
-                        {
-                            Examine(candidates.Flatten(cellL, cellA, homeB + shell));
-                        }
-                    }
-                }
-            }
-
-            return candidates.Argb[bestIndex];
-        }
-
-        /// <summary>
-        /// Computes the 6-bit-per-channel cache key for a pixel's color, ignoring alpha.
-        /// </summary>
-        /// <param name="argb">The pixel's 32-bit ARGB value.</param>
-        /// <returns>The cache key in [0, <see cref="CacheSize"/>).</returns>
-        private static int CacheKey(int argb)
-        {
-            return CacheKey((argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF);
-        }
-
-        /// <summary>
-        /// Computes the 6-bit-per-channel cache key for separate color channels.
-        /// </summary>
-        /// <param name="r">The red channel, 0 to 255.</param>
-        /// <param name="g">The green channel, 0 to 255.</param>
-        /// <param name="b">The blue channel, 0 to 255.</param>
-        /// <returns>The cache key in [0, <see cref="CacheSize"/>).</returns>
-        private static int CacheKey(int r, int g, int b)
-        {
-            return ((r >> 2) << (2 * BitsPerChannel)) | ((g >> 2) << BitsPerChannel) | (b >> 2);
+            int index = NearestQuantiser.NearestIndex(candidates, targetL, targetA, targetB);
+            return candidates.Argb[index];
         }
 
         /// <summary>

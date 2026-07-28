@@ -7,6 +7,7 @@ using System.Windows.Forms;
 using PaintTranslator.Data;
 using PaintTranslator.Pigments;
 using PaintTranslator.Imaging;
+using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Input;
 
 namespace PaintTranslator
@@ -89,6 +90,48 @@ namespace PaintTranslator
         private bool imageOperationInProgress;
 
         /// <summary>
+        /// Each style's live parameter values, kept per stage instance and per style so
+        /// switching away and back does not silently discard an adjustment. Cleared
+        /// only by the reset button, and never by loading an image — a colour setting
+        /// does not stop meaning what it meant when the picture changes.
+        /// </summary>
+        private readonly Dictionary<string, Dictionary<IPipelineStage, ParameterValues>> styleValues =
+            new Dictionary<string, Dictionary<IPipelineStage, ParameterValues>>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// The bold variant of the form's own font, used for every stage heading the
+        /// style panel shows. Built once and reused rather than created per heading
+        /// per rebuild, so switching styles back and forth repeatedly during a session
+        /// does not leak one GDI font handle per switch.
+        /// </summary>
+        private Font stageHeadingFont;
+
+        /// <summary>
+        /// The width given to every label and slider the style panel builds. Fixed
+        /// rather than measured from <see cref="stylePanel"/>'s own width, because
+        /// <see cref="FlowLayoutPanel"/> does not stretch its children to fill the
+        /// cross-axis the way <see cref="System.Windows.Forms.DockStyle.Fill"/> would;
+        /// each control has to be told its own width, and <see cref="stylePanel"/>'s
+        /// width is fixed by <see cref="palettePanel"/>'s own <c>Dock.Right</c> sizing
+        /// in practice, so a constant does not drift from reality. Kept comfortably
+        /// under the panel's 250px width (rather than flush with it) because Tonalism's
+        /// three stage groups overflow the panel's 120px height, and the vertical
+        /// scrollbar <see cref="FlowLayoutPanel.AutoScroll"/> then shows would clip a
+        /// child sized flush to the panel's un-scrolled width.
+        /// </summary>
+        private const int StyleControlWidth = 210;
+
+        /// <summary>
+        /// The number of discrete positions a parameter's <see cref="TrackBar"/>
+        /// offers. <see cref="TrackBar"/> is integer-valued, so every parameter is
+        /// carried on this fixed hundred-step scale and converted at the edges.
+        /// Giving each parameter its own tick count instead would make a slider's feel
+        /// depend on its units, rather than every slider covering its own range with
+        /// the same granularity.
+        /// </summary>
+        private const int TrackBarSteps = 100;
+
+        /// <summary>
         /// Initializes a new instance of the <see cref="MainForm"/> class.
         /// </summary>
         public MainForm()
@@ -98,6 +141,253 @@ namespace PaintTranslator
             // Item objects carry their swatch color, so they can't be expressed as
             // Designer literals; populate the list in code from the saved palette.
             PopulatePaintList(UserPaletteStore.Load());
+
+            // Style names come from the registry rather than Designer literals, so a
+            // later task can add styles without touching this form.
+            foreach (StyleDefinition style in StyleRegistry.All)
+            {
+                styleComboBox.Items.Add(style.Name);
+            }
+
+            // Setting SelectedItem raises SelectedIndexChanged (the combo box starts
+            // with no selection), which builds the panel for the default style. There
+            // is deliberately no separate call to build it here.
+            styleComboBox.SelectedItem = StyleRegistry.Default.Name;
+        }
+
+        /// <summary>
+        /// Gets the given style's live parameter values, creating them at that
+        /// style's own defaults (its stages' declared defaults plus this style's own
+        /// <see cref="StyleDefinition.DefaultOverrides"/>) the first time this style
+        /// is seen this session.
+        /// </summary>
+        /// <param name="style">The style to fetch or seed values for.</param>
+        /// <returns>The style's live values, keyed by stage instance. The same
+        /// dictionary instance is returned on every call for a given style until the
+        /// reset button replaces it, so a caller may hold onto it across an
+        /// <c>await</c> without it going stale underneath them.</returns>
+        private Dictionary<IPipelineStage, ParameterValues> GetOrCreateStyleValues(StyleDefinition style)
+        {
+            if (!styleValues.TryGetValue(style.Name, out Dictionary<IPipelineStage, ParameterValues> values))
+            {
+                values = new Dictionary<IPipelineStage, ParameterValues>(StylePipeline.DefaultValues(style));
+                styleValues[style.Name] = values;
+            }
+
+            return values;
+        }
+
+        /// <summary>
+        /// Rebuilds the style parameter panel from scratch for one style: a bold
+        /// heading per stage that declares any parameters, followed by a caption and
+        /// a slider per parameter, in pipeline order (pre-map stages, remap,
+        /// candidates, quantiser, then post-map stages). Called on every style
+        /// switch and after a reset, since either can change which values the
+        /// sliders should show.
+        /// </summary>
+        /// <param name="style">The style whose stages populate the panel.</param>
+        private void BuildStylePanel(StyleDefinition style)
+        {
+            Dictionary<IPipelineStage, ParameterValues> values = GetOrCreateStyleValues(style);
+
+            stylePanel.SuspendLayout();
+            try
+            {
+                // Controls.Clear() does not dispose what it removes; without this,
+                // every style switch would leak the labels and trackbars from the
+                // previous one.
+                foreach (Control control in stylePanel.Controls)
+                {
+                    control.Dispose();
+                }
+                stylePanel.Controls.Clear();
+
+                if (stageHeadingFont == null)
+                {
+                    stageHeadingFont = new Font(Font, FontStyle.Bold);
+                }
+
+                foreach (IPipelineStage stage in EnumerateStages(style))
+                {
+                    if (stage.Parameters.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    stylePanel.Controls.Add(new Label
+                    {
+                        AutoSize = true,
+                        Font = stageHeadingFont,
+                        Text = stage.DisplayName,
+                        Margin = new Padding(3, 8, 3, 2),
+                    });
+
+                    ParameterValues stageValues = values[stage];
+                    foreach (StyleParameter parameter in stage.Parameters)
+                    {
+                        var caption = new Label
+                        {
+                            AutoSize = false,
+                            Width = StyleControlWidth,
+                            Text = FormatParameterCaption(parameter, stageValues[parameter.Id]),
+                            Margin = new Padding(3, 0, 3, 0),
+                        };
+                        stylePanel.Controls.Add(caption);
+
+                        var trackBar = new TrackBar
+                        {
+                            Minimum = 0,
+                            Maximum = TrackBarSteps,
+                            TickStyle = TickStyle.None,
+                            Width = StyleControlWidth,
+                            Margin = new Padding(3, 0, 3, 4),
+                            Value = ParameterValueToTrackBarPosition(parameter, stageValues[parameter.Id]),
+                        };
+
+                        // The shared handler needs the declaration to convert the raw
+                        // position back to a value, the values instance to write it
+                        // into, and the caption to update — everything it cannot get
+                        // from the TrackBar itself.
+                        trackBar.Tag = (stage, parameter, stageValues, caption);
+                        trackBar.ValueChanged += StyleParameterTrackBar_ValueChanged;
+                        stylePanel.Controls.Add(trackBar);
+                    }
+                }
+            }
+            finally
+            {
+                stylePanel.ResumeLayout();
+            }
+        }
+
+        /// <summary>
+        /// Lists a style's stages in the order <see cref="StylePipeline.Render"/>
+        /// runs them, which is also the order their controls should appear in the
+        /// panel: pre-map stages, the remap, the candidate transform, the quantiser,
+        /// then post-map stages.
+        /// </summary>
+        /// <param name="style">The style to enumerate.</param>
+        /// <returns>Every stage <paramref name="style"/> names, in pipeline order.</returns>
+        private static IEnumerable<IPipelineStage> EnumerateStages(StyleDefinition style)
+        {
+            foreach (IPreMapStage stage in style.PreMap)
+            {
+                yield return stage;
+            }
+
+            yield return style.Remap;
+            yield return style.Candidates;
+            yield return style.Quantiser;
+
+            foreach (IPostMapStage stage in style.PostMap)
+            {
+                yield return stage;
+            }
+        }
+
+        /// <summary>
+        /// Converts a parameter's current value to the position its slider should
+        /// show, spreading the parameter's whole range across
+        /// <see cref="TrackBarSteps"/> discrete steps.
+        /// </summary>
+        /// <param name="parameter">The parameter's declaration, giving its range.</param>
+        /// <param name="value">The value to place on the slider.</param>
+        /// <returns>The nearest slider position, from 0 to <see cref="TrackBarSteps"/>.</returns>
+        private static int ParameterValueToTrackBarPosition(StyleParameter parameter, double value)
+        {
+            return (int)Math.Round(
+                (value - parameter.Minimum) / (parameter.Maximum - parameter.Minimum) * TrackBarSteps);
+        }
+
+        /// <summary>
+        /// Converts a slider position back to the parameter value it represents, the
+        /// inverse of <see cref="ParameterValueToTrackBarPosition"/>.
+        /// </summary>
+        /// <param name="parameter">The parameter's declaration, giving its range.</param>
+        /// <param name="position">The slider position, from 0 to <see cref="TrackBarSteps"/>.</param>
+        /// <returns>The parameter value the position represents.</returns>
+        private static double TrackBarPositionToParameterValue(StyleParameter parameter, int position)
+        {
+            return parameter.Minimum + (position / (double)TrackBarSteps) * (parameter.Maximum - parameter.Minimum);
+        }
+
+        /// <summary>
+        /// Formats a parameter slider's caption from its label, current value and
+        /// unit, trimming the trailing space a unit-less parameter would otherwise
+        /// leave behind.
+        /// </summary>
+        /// <param name="parameter">The parameter's declaration, giving its label and unit.</param>
+        /// <param name="value">The value to display.</param>
+        /// <returns>The formatted caption.</returns>
+        private static string FormatParameterCaption(StyleParameter parameter, double value)
+        {
+            return $"{parameter.Label}: {value:0.##} {parameter.Unit}".TrimEnd();
+        }
+
+        /// <summary>
+        /// Writes a moved slider's value back into its parameter and updates the
+        /// caption above it. Shared by every slider the style panel builds; each
+        /// carries the stage, parameter, values and caption it owns in its
+        /// <see cref="Control.Tag"/>, which is what lets one handler serve all of
+        /// them rather than a closure captured per slider.
+        /// <para>
+        /// Deliberately does not re-convert: a moved slider is a preview of a choice
+        /// the user has not committed to yet, and re-running the (potentially slow)
+        /// conversion on every tick would make dragging a slider feel like it hangs.
+        /// </para>
+        /// </summary>
+        /// <param name="sender">The slider that moved.</param>
+        /// <param name="e">The event arguments.</param>
+        private void StyleParameterTrackBar_ValueChanged(object sender, EventArgs e)
+        {
+            var trackBar = (TrackBar)sender;
+            (IPipelineStage _, StyleParameter parameter, ParameterValues values, Label caption) =
+                ((IPipelineStage, StyleParameter, ParameterValues, Label))trackBar.Tag;
+
+            double value = TrackBarPositionToParameterValue(parameter, trackBar.Value);
+            values.Set(parameter.Id, value);
+            caption.Text = FormatParameterCaption(parameter, value);
+        }
+
+        /// <summary>
+        /// Rebuilds the parameter panel for the newly selected style, so its
+        /// sliders always reflect that style's own live (possibly previously
+        /// tweaked) values rather than whatever the last style left on screen.
+        /// </summary>
+        /// <param name="sender">The style combo box.</param>
+        /// <param name="e">The event arguments.</param>
+        private void StyleComboBox_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            StyleDefinition style = StyleRegistry.ByName((string)styleComboBox.SelectedItem);
+            BuildStylePanel(style);
+        }
+
+        /// <summary>
+        /// Restores the active style's parameters to that style's own defaults —
+        /// its stages' declared defaults with this style's <see cref="StyleDefinition.DefaultOverrides"/>
+        /// re-applied on top — and rebuilds the panel to show them.
+        /// <para>
+        /// Rebuilds the whole values dictionary via <see cref="StylePipeline.DefaultValues"/>
+        /// rather than calling <see cref="ParameterValues.ResetToDefaults"/> on each
+        /// existing instance: that method restores a stage's own declared default,
+        /// which for a style that overrides it (Tonalism's contrast, tuned to 0.55
+        /// against <c>ToneAndChromaRemap</c>'s stage-level default of 1.0, for
+        /// example) is not the value the user would recognise as "this style's
+        /// defaults" — it would silently make the style look like a different one.
+        /// </para>
+        /// <para>
+        /// Only the active style's entry in <see cref="styleValues"/> is replaced, so
+        /// a tweak the user made to a different style earlier in the session
+        /// survives. Mark size lives outside this panel entirely and is untouched.
+        /// </para>
+        /// </summary>
+        /// <param name="sender">The reset button.</param>
+        /// <param name="e">The event arguments.</param>
+        private void ResetStyleButton_Click(object sender, EventArgs e)
+        {
+            StyleDefinition style = StyleRegistry.ByName((string)styleComboBox.SelectedItem);
+            styleValues[style.Name] = new Dictionary<IPipelineStage, ParameterValues>(StylePipeline.DefaultValues(style));
+            BuildStylePanel(style);
         }
 
         /// <summary>
@@ -365,6 +655,15 @@ namespace PaintTranslator
             sourcePhoto = photo;
             sourcePhotoName = name;
 
+            // A brush covers a roughly constant fraction of a canvas whatever
+            // resolution the file happens to be, so the default follows the image
+            // rather than persisting from the last one. A deliberate adjustment
+            // survives until the next load, which is when it stops being meaningful.
+            markTrackBar.Value = Math.Clamp(
+                RenderContext.DefaultMarkPixels(photo.Width, photo.Height),
+                markTrackBar.Minimum,
+                markTrackBar.Maximum);
+
             SetDisplayedImage(new Bitmap(sourcePhoto));
             wheelDisplayed = false;
             Text = $"Paint Translator - {sourcePhotoName}";
@@ -444,11 +743,29 @@ namespace PaintTranslator
             SetImageOperationInProgress(true);
             try
             {
-                // Read the option on the UI thread; the conversion itself runs
-                // on a worker where touching controls isn't allowed.
+                // All of these are read on the UI thread; the conversion runs on a
+                // worker where touching controls is not allowed. The style's values
+                // dictionary in particular must be read here rather than inside the
+                // worker delegate, since GetOrCreateStyleValues can create and store
+                // a new dictionary the first time a style is seen, which is exactly
+                // the kind of control-adjacent state that belongs on this thread.
                 int blurRadius = blurTrackBar.Value;
+                int markPixels = markTrackBar.Value;
+                StyleDefinition style = StyleRegistry.ByName((string)styleComboBox.SelectedItem);
+                Dictionary<IPipelineStage, ParameterValues> values = GetOrCreateStyleValues(style);
 
-                Bitmap converted = await Task.Run(() => PalettePhotoConverter.Convert(sourcePhoto, selected, blurRadius));
+                // blurRadius predates the style pipeline and has no slot of its own
+                // in a StyleDefinition, so it is composed onto the style and this
+                // style's own live values by the same helper PalettePhotoConverter
+                // uses for its own blurRadius parameter. Composing onto a copy, not
+                // styleValues[style.Name] itself, is what keeps a blur-stage entry
+                // from accumulating in the dictionary this form reuses across every
+                // future conversion and style switch.
+                (StyleDefinition renderStyle, IReadOnlyDictionary<IPipelineStage, ParameterValues> renderValues) =
+                    PalettePhotoConverter.ComposeWithBlur(style, values, blurRadius);
+
+                Bitmap converted = await Task.Run(
+                    () => StylePipeline.Render(sourcePhoto, selected, renderStyle, markPixels, renderValues));
 
                 SetDisplayedImage(converted);
                 wheelDisplayed = false;
@@ -478,6 +795,17 @@ namespace PaintTranslator
             // "0 px" would read as a setting rather than as the blur being absent,
             // which is what a zero radius actually means.
             blurLabel.Text = radius == 0 ? "Blur: off" : $"Blur: {radius} px";
+        }
+
+        /// <summary>
+        /// Updates the mark-size label to read back the slider's current value, since a
+        /// bare slider gives no indication of the value it is sitting on.
+        /// </summary>
+        /// <param name="sender">The slider that raised the event.</param>
+        /// <param name="e">The event arguments.</param>
+        private void MarkTrackBar_ValueChanged(object sender, EventArgs e)
+        {
+            markLabel.Text = $"Brush mark: {markTrackBar.Value} px";
         }
 
         /// <summary>
