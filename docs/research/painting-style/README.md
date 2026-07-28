@@ -14,6 +14,14 @@ are long; read this first and go to them for detail.
 | [03-brushwork-and-edges.md](03-brushwork-and-edges.md) | Edge hierarchy, mark size, broken colour, grounds — and the classical algorithms that approximate each. 11 levers ranked by payoff ÷ cost. |
 | [04-appeal-and-perception.md](04-appeal-and-perception.md) | Why literal copies look dead, value design, saliency and focal points, empirical aesthetics. Ends in a "what not to build" list. |
 
+**Per-style follow-up research**, done once a style is being nailed down rather than merely
+registered:
+
+| Index | Covers |
+|---|---|
+| [abstract/README.md](abstract/README.md) | Abstract. Four more tracks, 2026-07-28. Concludes the shipped style operates on the wrong axis — abstraction is spatial, not chromatic — and **corrects the green chroma figure below**. |
+| [fauvism/README.md](fauvism/README.md) | Fauvism. Four more tracks, 2026-07-28. All four measured fragmentation, not chroma, as the defect — Fauvism is the least paintable of the five styles. **Overturns the abstract round's per-hue chroma ceiling** (masstone is not the ceiling: a white tint raises C\* for 13 of 18 chromatic paints), and finds contrast 1.35 wrong by sign. |
+
 ## The one finding all four tracks reached independently
 
 **Replace the Gaussian pre-blur with an edge-preserving filter.** This is the strongest
@@ -156,6 +164,29 @@ compelling and does not survive the evidence:
 C\* 84 is yellow, orange or red. The best blue is Cobalt at 70.7; the best green is
 Permanent Green Light at 56.0. A Fauvist ×2 is simply unreachable in blues and greens —
 boosting chroma and letting nearest-Lab clip will band and hue-drift rather than saturate.
+
+> **Corrected 2026-07-28 — the green figure above is wrong for any user-facing purpose.**
+> Permanent Green Light is `ReflectanceDerived`, so it never reaches
+> `PigmentLibrary.Selectable` and a user cannot choose it. Over the **19 selectable** paints
+> the best green masstone is Phthalo Green (Y.S.) at **C\* 31.9, L\* 18.9**; hue sectors
+> 120–150° and 180–210° hold **no selectable masstone at all**, and 330–360° is empty across
+> all 80. Cobalt at 70.7 *is* selectable, so the blue figure stands. The practical
+> consequence is that a **scalar** chroma ceiling makes "×1.5" mean 106 in yellow and 32 in
+> green — see [abstract/README.md](abstract/README.md), correction 1.
+
+> **Corrected again 2026-07-28 — the correction above is itself wrong, and so is the original.**
+> Both read masstone figures off the manifest, and **masstone is not the chroma ceiling**. 13 of
+> 18 chromatic selectable paints reach higher C\* in a white tint than at full strength: Phthalo
+> Green (Y.S.) goes **18.9 → 56.3 at L\* 75.6**, Dioxazine Purple **6.5 → 52.6**. Dark
+> transparent pigments read as near-black at masstone and two-constant K-M gets that right.
+> Computed over the real candidate set (84,063 mixtures from the 19 selectable paints) there is
+> **no empty hue sector and none below C\* 35**, and greens reach **C\* 86–89 at L\* 70–82**. The
+> Fauvist red/green opposition *is* reachable, in a band at L\* 55–65. Related: "K-M mixing always
+> lands below both parents" is also false — 6.49% of sampled pair mixtures exceed both.
+> **A per-hue chroma ceiling is still the right build item; build it from the candidate set, never
+> from the manifest.** See [fauvism/README.md](fauvism/README.md), correction 1. That report's own
+> caveat applies: the probes transcribed `ScaleChroma` rather than calling it, so re-verify before
+> building.
 
 **Value and chroma are coupled** (track 1, Hunt effect; corroborated by the HDR
 tone-mapping literature). Compressing L\* without raising chroma looks wrong. A value-curve

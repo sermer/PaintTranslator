@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git workflow
+
+- **Work in the main checkout, on `main`**, unless told otherwise in that request.
+- **Never create a git worktree, and never work inside one.** Not for isolation, not for a
+  long-running task, not because a skill or a plan suggests one. If a worktree already
+  exists, do not use it — say so and work in the main checkout instead. Worktrees have cost
+  real time here: research written into one sat invisible to the main checkout, a branch was
+  reset out from under committed work, and the handoff notes in each copy drifted apart.
+  Isolation is not worth a second copy of the tree the owner has to remember to look in.
+- **Don't create branches on your own initiative either.** Work parked on a side branch is
+  work the owner has to go find.
+- **Never commit.** Stage with `git add` and stop there. Every change is reviewed in the
+  working tree before it enters history, so a passing test run, a finished task, or a tidy
+  stopping point is not permission to commit.
+
 ## Check the research docs before planning
 
 `docs/research/` holds substantial prior research. Read the relevant index before
