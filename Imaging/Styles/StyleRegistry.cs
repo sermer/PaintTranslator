@@ -63,6 +63,7 @@ namespace PaintTranslator.Imaging.Styles
                     (tonalismRemap, "chroma", 0.45),
                     (tonalismMotherColour, "fraction", 0.30));
 
+            var fauvismFloor = new EdgePreservingFloor();
             var fauvismRemap = new ToneAndChromaRemap();
 
             // Fauvism declares no stage Realism and Tonalism do not already use — it
@@ -78,14 +79,15 @@ namespace PaintTranslator.Imaging.Styles
             var fauvism = new StyleDefinition(
                 "Fauvism",
                 1.3,
-                new IPreMapStage[] { new EdgePreservingFloor() },
+                new IPreMapStage[] { fauvismFloor },
                 fauvismRemap,
                 new KeepAllCandidates(),
                 new NearestQuantiser(),
-                Array.Empty<IPostMapStage>())
+                new IPostMapStage[] { new SmallRegionMerge(), new ContourLines() })
                 .WithDefaults(
-                    (fauvismRemap, "contrast", 1.35),
-                    (fauvismRemap, "chroma", 2.2));
+                    (fauvismFloor, "strength", 3.0),
+                    (fauvismRemap, "contrast", 0.95),
+                    (fauvismRemap, "chroma", 1.8));
 
             var postImpressionismFloor = new EdgePreservingFloor();
             var postImpressionismRemap = new ToneAndChromaRemap();
