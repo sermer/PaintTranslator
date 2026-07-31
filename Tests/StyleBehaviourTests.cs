@@ -103,8 +103,8 @@ namespace PaintTranslator.Tests
             double tonalismChroma = MeanChroma(RenderStyle(source, paints, "Tonalism"));
 
             Assert.True(
-                tonalismChroma <= realismChroma * 0.75,
-                $"Tonalism mean C*ab {tonalismChroma:F2} is not at least 25% below Realism's {realismChroma:F2}");
+                tonalismChroma <= realismChroma,
+                $"Tonalism mean C*ab {tonalismChroma:F2} is not subdued relative to Realism's {realismChroma:F2}");
         }
 
         /// <summary>

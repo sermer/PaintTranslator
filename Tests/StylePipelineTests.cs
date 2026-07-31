@@ -31,9 +31,8 @@ namespace PaintTranslator.Tests
         /// <para>
         /// This version re-derives the expected image independently instead: it builds
         /// the candidate set the same way <see cref="Styles.Stages.KeepAllCandidates"/>
-        /// (a no-op transform) does, applies the mandatory floor at the exact call
-        /// <see cref="Styles.Stages.EdgePreservingFloor"/> makes at its declared
-        /// defaults, and then finds each pixel's nearest candidate by a brute-force scan
+        /// (a no-op transform) does, applies the mandatory floor at Realism's configured
+        /// edge threshold, and then finds each pixel's nearest candidate by a brute-force scan
         /// over every candidate rather than through <see cref="Styles.Stages.NearestQuantiser"/>'s
         /// grid-shell index. Only the colour quantization step (<see cref="ColorQuantization"/>)
         /// is shared with the code under test, because Task 10's review separately found
@@ -65,7 +64,7 @@ namespace PaintTranslator.Tests
 
             int[] floored = StyleTestFixtures.ReadPixels(source, out int stride);
             int floorRadius = PalettePhotoConverter.FloorRadius(mark);
-            GuidedFilter.Apply(floored, stride, source.Width, source.Height, floorRadius, GuidedFilter.DefaultEdgeThreshold, 1);
+            GuidedFilter.Apply(floored, stride, source.Width, source.Height, floorRadius, 0.10, 1);
 
             var expected = new int[floored.Length];
             for (int y = 0; y < source.Height; y++)

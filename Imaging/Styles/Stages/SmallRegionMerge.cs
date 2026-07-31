@@ -5,8 +5,9 @@ namespace PaintTranslator.Imaging.Styles.Stages
 {
     /// <summary>
     /// Absorbs connected candidate regions smaller than one brushmark's area into a
-    /// neighbouring region. Because this stage rewrites indices only, it cannot
-    /// synthesize a colour outside the achievable candidate set.
+    /// neighbouring region. Components are processed smallest-first and their areas
+    /// are accumulated as unions happen, so one invocation converges instead of
+    /// repeatedly merging stale small-region labels.
     /// </summary>
     internal sealed class SmallRegionMerge : IPostMapStage
     {
@@ -31,68 +32,240 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             var labels = new int[strideInts * height];
             Array.Fill(labels, -1);
-            var regions = new List<Region>();
+            var valuesByRegion = new List<int>();
+            var areas = new List<int>();
 
-            for (int y = 0; y < height; y++)
+            LabelRegions(
+                indices,
+                labels,
+                strideInts,
+                width,
+                height,
+                valuesByRegion,
+                areas);
+
+            int regionCount = valuesByRegion.Count;
+            var parent = new int[regionCount];
+            var neighbours = new List<HashSet<int>>(regionCount);
+            for (int i = 0; i < regionCount; i++)
             {
-                for (int x = 0; x < width; x++)
+                parent[i] = i;
+                neighbours.Add(new HashSet<int>());
+            }
+
+            BuildAdjacency(labels, strideInts, width, height, neighbours);
+
+            var pending = new SortedSet<(int Area, int Region)>();
+            for (int i = 0; i < regionCount; i++)
+            {
+                if (areas[i] < minimumArea)
                 {
-                    int at = (y * strideInts) + x;
-                    if (labels[at] >= 0)
-                    {
-                        continue;
-                    }
-
-                    int label = regions.Count;
-                    int value = indices[at];
-                    var pixels = new List<int>();
-                    var queue = new Queue<(int X, int Y)>();
-                    queue.Enqueue((x, y));
-                    labels[at] = label;
-
-                    while (queue.Count > 0)
-                    {
-                        (int currentX, int currentY) = queue.Dequeue();
-                        int current = (currentY * strideInts) + currentX;
-                        pixels.Add(current);
-
-                        TryEnqueue(currentX - 1, currentY, value, label, indices, labels, strideInts, width, height, queue);
-                        TryEnqueue(currentX + 1, currentY, value, label, indices, labels, strideInts, width, height, queue);
-                        TryEnqueue(currentX, currentY - 1, value, label, indices, labels, strideInts, width, height, queue);
-                        TryEnqueue(currentX, currentY + 1, value, label, indices, labels, strideInts, width, height, queue);
-                    }
-
-                    regions.Add(new Region(value, pixels));
+                    pending.Add((areas[i], i));
                 }
             }
 
-            for (int regionIndex = 0; regionIndex < regions.Count; regionIndex++)
+            while (pending.Count > 0)
             {
-                Region region = regions[regionIndex];
-                if (region.Pixels.Count >= minimumArea)
+                (int _, int candidate) = pending.Min;
+                pending.Remove(pending.Min);
+                int source = Find(parent, candidate);
+                if (source != candidate || areas[source] >= minimumArea)
                 {
                     continue;
                 }
 
-                int target = LargestNeighbour(regionIndex, region, regions, labels, strideInts, width, height, minimumArea);
+                int target = LargestNeighbour(source, parent, areas, neighbours, minimumArea);
                 if (target < 0)
                 {
                     continue;
                 }
 
-                int replacement = regions[target].Value;
-                foreach (int pixel in region.Pixels)
+                int oldTargetArea = areas[target];
+                pending.Remove((oldTargetArea, target));
+                Merge(source, target, parent, areas, neighbours);
+                if (areas[target] < minimumArea)
                 {
-                    indices[pixel] = replacement;
+                    pending.Add((areas[target], target));
                 }
             }
+
+            for (int y = 0; y < height; y++)
+            {
+                int row = y * strideInts;
+                for (int x = 0; x < width; x++)
+                {
+                    int at = row + x;
+                    indices[at] = valuesByRegion[Find(parent, labels[at])];
+                }
+            }
+        }
+
+        private static void LabelRegions(
+            int[] indices,
+            int[] labels,
+            int strideInts,
+            int width,
+            int height,
+            List<int> values,
+            List<int> areas)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    int at = y * strideInts + x;
+                    if (labels[at] >= 0)
+                    {
+                        continue;
+                    }
+
+                    int region = values.Count;
+                    int value = indices[at];
+                    int area = 0;
+                    var queue = new Queue<(int X, int Y)>();
+                    queue.Enqueue((x, y));
+                    labels[at] = region;
+
+                    while (queue.Count > 0)
+                    {
+                        (int currentX, int currentY) = queue.Dequeue();
+                        area++;
+                        TryEnqueue(currentX - 1, currentY, value, region, indices, labels, strideInts, width, height, queue);
+                        TryEnqueue(currentX + 1, currentY, value, region, indices, labels, strideInts, width, height, queue);
+                        TryEnqueue(currentX, currentY - 1, value, region, indices, labels, strideInts, width, height, queue);
+                        TryEnqueue(currentX, currentY + 1, value, region, indices, labels, strideInts, width, height, queue);
+                    }
+
+                    values.Add(value);
+                    areas.Add(area);
+                }
+            }
+        }
+
+        private static void BuildAdjacency(
+            int[] labels,
+            int strideInts,
+            int width,
+            int height,
+            IReadOnlyList<HashSet<int>> neighbours)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                int row = y * strideInts;
+                for (int x = 0; x < width; x++)
+                {
+                    int region = labels[row + x];
+                    if (x + 1 < width)
+                    {
+                        AddEdge(region, labels[row + x + 1], neighbours);
+                    }
+
+                    if (y + 1 < height)
+                    {
+                        AddEdge(region, labels[row + strideInts + x], neighbours);
+                    }
+                }
+            }
+        }
+
+        private static void AddEdge(int left, int right, IReadOnlyList<HashSet<int>> neighbours)
+        {
+            if (left == right)
+            {
+                return;
+            }
+
+            neighbours[left].Add(right);
+            neighbours[right].Add(left);
+        }
+
+        private static int LargestNeighbour(
+            int source,
+            int[] parent,
+            IReadOnlyList<int> areas,
+            IReadOnlyList<HashSet<int>> neighbours,
+            int minimumArea)
+        {
+            int bestLarge = -1;
+            int bestLargeArea = -1;
+            int bestAny = -1;
+            int bestAnyArea = -1;
+
+            foreach (int neighbour in neighbours[source])
+            {
+                int root = Find(parent, neighbour);
+                if (root == source)
+                {
+                    continue;
+                }
+
+                if (areas[root] > bestAnyArea)
+                {
+                    bestAny = root;
+                    bestAnyArea = areas[root];
+                }
+
+                if (areas[root] >= minimumArea && areas[root] > bestLargeArea)
+                {
+                    bestLarge = root;
+                    bestLargeArea = areas[root];
+                }
+            }
+
+            return bestLarge >= 0 ? bestLarge : bestAny;
+        }
+
+        private static void Merge(
+            int source,
+            int target,
+            int[] parent,
+            IList<int> areas,
+            IList<HashSet<int>> neighbours)
+        {
+            parent[source] = target;
+            areas[target] += areas[source];
+
+            var sourceNeighbours = new List<int>(neighbours[source]);
+            neighbours[target].Remove(source);
+            foreach (int neighbour in sourceNeighbours)
+            {
+                int root = Find(parent, neighbour);
+                if (root == target || root == source)
+                {
+                    continue;
+                }
+
+                neighbours[target].Add(root);
+                neighbours[root].Remove(source);
+                neighbours[root].Add(target);
+            }
+
+            neighbours[source].Clear();
+        }
+
+        private static int Find(int[] parent, int value)
+        {
+            int root = value;
+            while (parent[root] != root)
+            {
+                root = parent[root];
+            }
+
+            while (parent[value] != value)
+            {
+                int next = parent[value];
+                parent[value] = root;
+                value = next;
+            }
+
+            return root;
         }
 
         private static void TryEnqueue(
             int x,
             int y,
             int value,
-            int label,
+            int region,
             int[] indices,
             int[] labels,
             int strideInts,
@@ -105,92 +278,12 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 return;
             }
 
-            int at = (y * strideInts) + x;
+            int at = y * strideInts + x;
             if (labels[at] < 0 && indices[at] == value)
             {
-                labels[at] = label;
+                labels[at] = region;
                 queue.Enqueue((x, y));
             }
-        }
-
-        private static int LargestNeighbour(
-            int regionIndex,
-            Region region,
-            IReadOnlyList<Region> regions,
-            int[] labels,
-            int strideInts,
-            int width,
-            int height,
-            int minimumArea)
-        {
-            int best = -1;
-            int bestSize = -1;
-            int fallback = -1;
-            int fallbackSize = -1;
-
-            foreach (int pixel in region.Pixels)
-            {
-                int x = pixel % strideInts;
-                int y = pixel / strideInts;
-                ConsiderNeighbour(x - 1, y, regionIndex, regions, labels, strideInts, width, height, ref best, ref bestSize, ref fallback, ref fallbackSize, minimumArea);
-                ConsiderNeighbour(x + 1, y, regionIndex, regions, labels, strideInts, width, height, ref best, ref bestSize, ref fallback, ref fallbackSize, minimumArea);
-                ConsiderNeighbour(x, y - 1, regionIndex, regions, labels, strideInts, width, height, ref best, ref bestSize, ref fallback, ref fallbackSize, minimumArea);
-                ConsiderNeighbour(x, y + 1, regionIndex, regions, labels, strideInts, width, height, ref best, ref bestSize, ref fallback, ref fallbackSize, minimumArea);
-            }
-
-            return best >= 0 ? best : fallback;
-        }
-
-        private static void ConsiderNeighbour(
-            int x,
-            int y,
-            int regionIndex,
-            IReadOnlyList<Region> regions,
-            int[] labels,
-            int strideInts,
-            int width,
-            int height,
-            ref int best,
-            ref int bestSize,
-            ref int fallback,
-            ref int fallbackSize,
-            int minimumArea)
-        {
-            if (x < 0 || x >= width || y < 0 || y >= height)
-            {
-                return;
-            }
-
-            int neighbour = labels[(y * strideInts) + x];
-            if (neighbour < 0 || neighbour == regionIndex)
-            {
-                return;
-            }
-
-            int size = regions[neighbour].Pixels.Count;
-            if (size > fallbackSize)
-            {
-                fallback = neighbour;
-                fallbackSize = size;
-            }
-
-            if (size >= minimumArea && size > bestSize)
-            {
-                best = neighbour;
-                bestSize = size;
-            }
-        }
-
-        private sealed class Region
-        {
-            public Region(int value, List<int> pixels)
-            {
-                Value = value;
-                Pixels = pixels;
-            }
-
-            public int Value { get; }
-            public List<int> Pixels { get; }
         }
     }
 }

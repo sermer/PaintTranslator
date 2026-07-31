@@ -49,7 +49,9 @@ namespace PaintTranslator.Tests
             // The order this test insists on: the mandatory floor first, exactly as
             // Convert called it before the style pipeline existed, then the optional
             // blur on top of the floor's own output.
-            GuidedFilter.Apply(expected, stride, source.Width, source.Height, floorRadius, GuidedFilter.DefaultEdgeThreshold, 1);
+            // The default converter resolves the Realism style, whose research-tuned
+            // edge threshold is 0.10 rather than the reusable stage default of 0.05.
+            GuidedFilter.Apply(expected, stride, source.Width, source.Height, floorRadius, 0.10, 1);
             GaussianBlur.Apply(expected, stride, source.Width, source.Height, BlurRadius);
 
             int[] expectedMapped = PalettePhotoConverter.MapThroughIndex(paints, expected);

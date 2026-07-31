@@ -112,6 +112,18 @@ namespace PaintTranslator.Tests
             Assert.Equal(1, new MixtureBuilder(paints).MostNeutralPaintIndex());
         }
 
+        [Fact]
+        public void NeutralSelectionPrefersAvailableMiddleValueOverWhite()
+        {
+            var paints = new[]
+            {
+                PigmentLibrary.Selectable[0],   // Titanium White
+                PigmentLibrary.Selectable[18],  // Bone Black
+            };
+
+            Assert.Equal(1, new MixtureBuilder(paints).MostNeutralPaintIndex());
+        }
+
         /// <summary>
         /// Pins the pair sampler's density against a fixed threshold rather than
         /// against <see cref="PalettePhotoConverter"/>'s own output — comparing the

@@ -30,18 +30,22 @@ namespace PaintTranslator.Imaging.Styles
         /// <returns>Every style the application offers, in presentation order.</returns>
         private static IReadOnlyList<StyleDefinition> BuildAll()
         {
+            var realismFloor = new EdgePreservingFloor();
             var realism = new StyleDefinition(
                 "Realism",
                 1.0,
-                new IPreMapStage[] { new EdgePreservingFloor() },
+                new IPreMapStage[] { realismFloor },
                 new IdentityRemap(),
                 new KeepAllCandidates(),
                 new NearestQuantiser(),
-                Array.Empty<IPostMapStage>());
+                Array.Empty<IPostMapStage>())
+                // Realism benefits from a slightly wider edge-preserving gate while
+                // retaining its fidelity-first identity/rematching contract. The
+                // research found no support for a post-map merge or colour remap.
+                .WithDefaults((realismFloor, "edge", 0.10));
 
             var tonalismFloor = new EdgePreservingFloor();
             var tonalismRemap = new ToneAndChromaRemap();
-            var tonalismMotherColour = new MotherColourTransform();
 
             // Left at the stages' own declared defaults, Tonalism would render
             // identically to Realism plus a slightly stronger floor — every one of
@@ -53,15 +57,15 @@ namespace PaintTranslator.Imaging.Styles
                 1.2,
                 new IPreMapStage[] { tonalismFloor },
                 tonalismRemap,
-                tonalismMotherColour,
+                new KeepAllCandidates(),
                 new NearestQuantiser(),
-                Array.Empty<IPostMapStage>())
+                new IPostMapStage[] { new SmallRegionMerge() })
                 .WithDefaults(
                     (tonalismFloor, "strength", 2.0),
-                    (tonalismRemap, "contrast", 0.55),
-                    (tonalismRemap, "key", 4.0),
-                    (tonalismRemap, "chroma", 0.45),
-                    (tonalismMotherColour, "fraction", 0.30));
+                    (tonalismFloor, "edge", 0.10),
+                    (tonalismRemap, "contrast", 0.80),
+                    (tonalismRemap, "key", -8.0),
+                    (tonalismRemap, "chroma", 0.85));
 
             var fauvismFloor = new EdgePreservingFloor();
             var fauvismRemap = new ToneAndChromaRemap();
@@ -83,7 +87,7 @@ namespace PaintTranslator.Imaging.Styles
                 fauvismRemap,
                 new KeepAllCandidates(),
                 new NearestQuantiser(),
-                new IPostMapStage[] { new SmallRegionMerge(), new ContourLines() })
+                new IPostMapStage[] { new ContourLines(), new SmallRegionMerge() })
                 .WithDefaults(
                     (fauvismFloor, "strength", 3.0),
                     (fauvismRemap, "contrast", 0.95),
@@ -98,7 +102,7 @@ namespace PaintTranslator.Imaging.Styles
             // rendered Tonalism's restraint and Fauvism's excess, now pushed toward
             // flat planes of colour rather than a gradient — contrast 1.1 and chroma
             // 1.3 are both mild boosts, not Fauvism's extremes, because the flatness
-            // here is meant to come from the floor's strength, not from the remap.
+            // here is meant to come from the floor and area opening, not from the remap.
             var postImpressionism = new StyleDefinition(
                 "Post-Impressionism",
                 1.6,
@@ -106,11 +110,11 @@ namespace PaintTranslator.Imaging.Styles
                 postImpressionismRemap,
                 new KeepAllCandidates(),
                 new NearestQuantiser(),
-                Array.Empty<IPostMapStage>())
+                new IPostMapStage[] { new SmallRegionMerge() })
                 .WithDefaults(
                     (postImpressionismFloor, "strength", 3.0),
-                    (postImpressionismRemap, "contrast", 1.1),
-                    (postImpressionismRemap, "chroma", 1.3));
+                    (postImpressionismRemap, "contrast", 1.0),
+                    (postImpressionismRemap, "chroma", 1.45));
 
             var abstractFloor = new EdgePreservingFloor();
             var abstractRemap = new ToneAndChromaRemap();

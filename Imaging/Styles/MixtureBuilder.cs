@@ -16,6 +16,13 @@ namespace PaintTranslator.Imaging.Styles
     /// </summary>
     internal sealed class MixtureBuilder
     {
+        // A neutral mother should be near middle grey as well as low-chroma. A
+        // palette containing white and black otherwise always selects white because
+        // its masstone chroma is marginally lower, lifting the dark end of every
+        // mixture. This weight makes the selection prefer the nearer available neutral
+        // without requiring a named grey paint.
+        private const double NeutralLightnessWeight = 0.10;
+
         // How many interior points each two-paint mixing line is sampled at. Endpoints
         // are covered by the single-paint entries.
         //
@@ -184,7 +191,9 @@ namespace PaintTranslator.Imaging.Styles
         internal static bool IsMoreNeutral(
             double chroma, double lightnessGap, double bestChroma, double bestLightnessGap)
         {
-            return chroma < bestChroma || (chroma == bestChroma && lightnessGap < bestLightnessGap);
+            double score = chroma + (NeutralLightnessWeight * lightnessGap);
+            double bestScore = bestChroma + (NeutralLightnessWeight * bestLightnessGap);
+            return score < bestScore || (score == bestScore && lightnessGap < bestLightnessGap);
         }
 
         /// <summary>
