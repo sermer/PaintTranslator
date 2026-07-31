@@ -107,19 +107,30 @@ namespace PaintTranslator
         private Font stageHeadingFont;
 
         /// <summary>
-        /// The width given to every label and slider the style panel builds. Fixed
-        /// rather than measured from <see cref="stylePanel"/>'s own width, because
-        /// <see cref="FlowLayoutPanel"/> does not stretch its children to fill the
-        /// cross-axis the way <see cref="System.Windows.Forms.DockStyle.Fill"/> would;
-        /// each control has to be told its own width, and <see cref="stylePanel"/>'s
-        /// width is fixed by <see cref="palettePanel"/>'s own <c>Dock.Right</c> sizing
-        /// in practice, so a constant does not drift from reality. Kept comfortably
-        /// under the panel's 250px width (rather than flush with it) because Tonalism's
-        /// three stage groups overflow the panel's 120px height, and the vertical
-        /// scrollbar <see cref="FlowLayoutPanel.AutoScroll"/> then shows would clip a
-        /// child sized flush to the panel's un-scrolled width.
+        /// Horizontal space reserved around each dynamic style control. The control
+        /// width itself is measured from the panel at runtime; a fixed width left the
+        /// smoothing and edge sliders visibly short of the panel and became worse at
+        /// different DPI settings.
         /// </summary>
-        private const int StyleControlWidth = 210;
+        private const int StyleControlHorizontalMargin = 6;
+
+        /// <summary>Returns the usable width for a dynamic style label or slider.</summary>
+        private int StyleControlWidth
+        {
+            get
+            {
+                // Reserve the scrollbar before the first layout pass. Once the panel
+                // has overflowed, ClientSize already excludes it, so do not subtract
+                // it twice.
+                int width = stylePanel.ClientSize.Width - StyleControlHorizontalMargin;
+                if (!stylePanel.VerticalScroll.Visible)
+                {
+                    width -= SystemInformation.VerticalScrollBarWidth;
+                }
+
+                return Math.Max(1, width);
+            }
+        }
 
         /// <summary>
         /// The number of discrete positions a parameter's <see cref="TrackBar"/>
@@ -137,6 +148,7 @@ namespace PaintTranslator
         public MainForm()
         {
             InitializeComponent();
+            stylePanel.Resize += StylePanel_Resize;
 
             // Item objects carry their swatch color, so they can't be expressed as
             // Designer literals; populate the list in code from the saved palette.
@@ -223,23 +235,28 @@ namespace PaintTranslator
                     });
 
                     ParameterValues stageValues = values[stage];
+                    int controlWidth = StyleControlWidth;
                     foreach (StyleParameter parameter in stage.Parameters)
                     {
                         var caption = new Label
                         {
                             AutoSize = false,
-                            Width = StyleControlWidth,
+                            Width = controlWidth,
+                            Height = Font.Height + 6,
                             Text = FormatParameterCaption(parameter, stageValues[parameter.Id]),
                             Margin = new Padding(3, 0, 3, 0),
+                            TextAlign = ContentAlignment.MiddleLeft,
                         };
                         stylePanel.Controls.Add(caption);
 
                         var trackBar = new TrackBar
                         {
+                            AutoSize = false,
                             Minimum = 0,
                             Maximum = TrackBarSteps,
                             TickStyle = TickStyle.None,
-                            Width = StyleControlWidth,
+                            Width = controlWidth,
+                            Height = 36,
                             Margin = new Padding(3, 0, 3, 4),
                             Value = ParameterValueToTrackBarPosition(parameter, stageValues[parameter.Id]),
                         };
@@ -251,6 +268,30 @@ namespace PaintTranslator
                         trackBar.Tag = (stage, parameter, stageValues, caption);
                         trackBar.ValueChanged += StyleParameterTrackBar_ValueChanged;
                         stylePanel.Controls.Add(trackBar);
+                    }
+                }
+            }
+            finally
+            {
+                stylePanel.ResumeLayout();
+            }
+        }
+
+        /// <summary>
+        /// Keeps dynamic controls flush with the style panel when its client area
+        /// changes, while preserving a dedicated caption row above each slider.
+        /// </summary>
+        private void StylePanel_Resize(object sender, EventArgs e)
+        {
+            int width = StyleControlWidth;
+            stylePanel.SuspendLayout();
+            try
+            {
+                foreach (Control control in stylePanel.Controls)
+                {
+                    if (control is TrackBar || (control is Label label && !label.AutoSize))
+                    {
+                        control.Width = width;
                     }
                 }
             }

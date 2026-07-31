@@ -112,30 +112,27 @@ namespace PaintTranslator.Imaging.Styles
 
             var abstractFloor = new EdgePreservingFloor();
             var abstractRemap = new ToneAndChromaRemap();
-            var abstractMotherColour = new MotherColourTransform();
+            var abstractPalette = new AbstractPaletteTransform();
 
-            // Pushes every knob Post-Impressionism already turns further in the same
-            // direction — strength 5 and mark scale 2.5 flatten harder still — and
-            // adds the one stage neither Realism, Post-Impressionism nor Fauvism
-            // combines with ToneAndChromaRemap: MotherColourTransform, already used by
-            // Tonalism (at fraction 0.30, for restraint) but here at a lighter 0.15,
-            // enough to unify Abstract's large flat planes under one common note
-            // without erasing the chroma boost the remap just added. No new stage
-            // exists for this style; every one of its five slots is already
-            // registered by an earlier style in this file.
+            // Abstract's structure comes from its restricted, image-aware palette,
+            // not from pushing contrast and chroma farther than Post-Impressionism.
+            // The floor remains strong enough to establish broad source regions, and
+            // the palette transform harmonises those regions while keeping only a
+            // small number of achievable paint colours.
             var abstractStyle = new StyleDefinition(
                 "Abstract",
                 2.5,
                 new IPreMapStage[] { abstractFloor },
                 abstractRemap,
-                abstractMotherColour,
+                abstractPalette,
                 new NearestQuantiser(),
-                Array.Empty<IPostMapStage>())
+                new IPostMapStage[] { new GroundFill(), new SmallRegionMerge() })
                 .WithDefaults(
                     (abstractFloor, "strength", 5.0),
-                    (abstractRemap, "contrast", 1.5),
-                    (abstractRemap, "chroma", 1.5),
-                    (abstractMotherColour, "fraction", 0.15));
+                    (abstractRemap, "contrast", 1.1),
+                    (abstractRemap, "chroma", 1.0),
+                    (abstractPalette, "motherFraction", 0.15),
+                    (abstractPalette, "colourCount", 8.0));
 
             return new[] { realism, tonalism, fauvism, postImpressionism, abstractStyle };
         }

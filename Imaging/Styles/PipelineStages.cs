@@ -90,6 +90,23 @@ namespace PaintTranslator.Imaging.Styles
     }
 
     /// <summary>
+    /// Optional second pass for a candidate transform that needs the already-filtered
+    /// image to choose a smaller palette. It runs after slot 1 and after the initial
+    /// gamut has been built, while the data is still represented as candidate indices.
+    /// </summary>
+    internal interface IImageAwareCandidateTransform
+    {
+        CandidateSet Transform(
+            CandidateSet candidates,
+            int[] pixels,
+            int strideInts,
+            int width,
+            int height,
+            in RenderContext context,
+            ParameterValues values);
+    }
+
+    /// <summary>
     /// Slot 4. Chooses which candidate a colour becomes, by index.
     /// </summary>
     internal interface IQuantiser : IPipelineStage

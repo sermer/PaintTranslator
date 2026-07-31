@@ -79,6 +79,7 @@ namespace PaintTranslator.Imaging
             CandidateSet candidates = builder.Build();
 
             double achievableMaxChroma = MaximumChroma(candidates);
+            double[] achievableMaxChromaByHue = MaximumChromaByHue(candidates, achievableMaxChroma);
 
             int width = source.Width;
             int height = source.Height;
@@ -87,7 +88,12 @@ namespace PaintTranslator.Imaging
             // here, so every stage downstream sees only the product and can never
             // infer which style is asking by reading the two factors apart.
             double baseMark = markPixels > 0 ? markPixels : RenderContext.DefaultMarkPixels(width, height);
-            var context = new RenderContext(width, height, baseMark * style.MarkScale, achievableMaxChroma);
+            var context = new RenderContext(
+                width,
+                height,
+                baseMark * style.MarkScale,
+                achievableMaxChroma,
+                achievableMaxChromaByHue);
 
             // Drawing into a fresh 32bpp ARGB bitmap normalizes whatever pixel
             // format the photo arrived in, so the buffer below is always ARGB.
@@ -121,6 +127,19 @@ namespace PaintTranslator.Imaging
                 foreach (IPreMapStage stage in style.PreMap)
                 {
                     stage.Apply(pixels, strideInts, width, height, in context, values[stage]);
+                }
+
+                if (style.Candidates is IImageAwareCandidateTransform imageAwareCandidates)
+                {
+                    candidates = imageAwareCandidates.Transform(
+                        candidates, pixels, strideInts, width, height, in context, values[style.Candidates]);
+                    achievableMaxChroma = MaximumChroma(candidates);
+                    context = new RenderContext(
+                        width,
+                        height,
+                        baseMark * style.MarkScale,
+                        achievableMaxChroma,
+                        MaximumChromaByHue(candidates, achievableMaxChroma));
                 }
 
                 var indices = new int[strideInts * height];
@@ -325,6 +344,66 @@ namespace PaintTranslator.Imaging
             }
 
             return largest;
+        }
+
+        /// <summary>
+        /// Finds the largest achievable chroma in each ten-degree hue sector. Empty
+        /// sectors inherit the nearest populated sector so a sparse candidate set
+        /// never makes the remap divide by a zero ceiling for an otherwise chromatic
+        /// source colour.
+        /// </summary>
+        private static double[] MaximumChromaByHue(CandidateSet candidates, double fallback)
+        {
+            var ceilings = new double[RenderContext.HueSectorCount];
+            var populated = new bool[ceilings.Length];
+            for (int i = 0; i < candidates.Argb.Length; i++)
+            {
+                double chroma = Math.Sqrt((candidates.A[i] * candidates.A[i]) + (candidates.B[i] * candidates.B[i]));
+                if (chroma <= 1e-9)
+                {
+                    continue;
+                }
+
+                double angle = Math.Atan2(candidates.B[i], candidates.A[i]) * (180.0 / Math.PI);
+                if (angle < 0.0)
+                {
+                    angle += 360.0;
+                }
+
+                int sector = Math.Clamp((int)(angle / (360.0 / RenderContext.HueSectorCount)), 0, RenderContext.HueSectorCount - 1);
+                ceilings[sector] = Math.Max(ceilings[sector], chroma);
+                populated[sector] = true;
+            }
+
+            for (int sector = 0; sector < ceilings.Length; sector++)
+            {
+                if (populated[sector])
+                {
+                    continue;
+                }
+
+                int nearest = -1;
+                int distance = int.MaxValue;
+                for (int candidate = 0; candidate < ceilings.Length; candidate++)
+                {
+                    if (!populated[candidate])
+                    {
+                        continue;
+                    }
+
+                    int direct = Math.Abs(candidate - sector);
+                    int circular = Math.Min(direct, ceilings.Length - direct);
+                    if (circular < distance)
+                    {
+                        distance = circular;
+                        nearest = candidate;
+                    }
+                }
+
+                ceilings[sector] = nearest >= 0 ? ceilings[nearest] : fallback;
+            }
+
+            return ceilings;
         }
     }
 }

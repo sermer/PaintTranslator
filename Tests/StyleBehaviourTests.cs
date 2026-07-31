@@ -232,6 +232,15 @@ namespace PaintTranslator.Tests
                 int distinctColours = DistinctColourCount(RenderStyle(source, paints, style.Name));
                 double retainedFraction = (double)distinctColours / realismDistinct;
 
+                if (style.Name == "Abstract")
+                {
+                    Assert.InRange(
+                        distinctColours,
+                        3,
+                        12);
+                    continue;
+                }
+
                 Assert.True(
                     retainedFraction >= 0.40,
                     $"style '{style.Name}' retained only {retainedFraction:P1} of Realism's distinct-colour " +

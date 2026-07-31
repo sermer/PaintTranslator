@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace PaintTranslator.Imaging
 {
@@ -145,6 +146,61 @@ namespace PaintTranslator.Imaging
         /// contiguous.
         /// </summary>
         public int[] Members { get; }
+
+        /// <summary>
+        /// Finds the candidate nearest to a Lab colour, weighting lightness so
+        /// palette reduction preserves value structure before hue separation.
+        /// </summary>
+        public int FindNearest(double l, double a, double b, double lightnessWeight = 1.5)
+        {
+            int best = 0;
+            double bestDistance = double.MaxValue;
+            for (int i = 0; i < L.Length; i++)
+            {
+                double dl = L[i] - l;
+                double da = A[i] - a;
+                double db = B[i] - b;
+                double distance = (lightnessWeight * dl * dl) + (da * da) + (db * db);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = i;
+                }
+            }
+
+            return best;
+        }
+
+        /// <summary>Creates a candidate set containing the supplied unique indices.</summary>
+        public CandidateSet Select(IReadOnlyCollection<int> selected)
+        {
+            if (selected == null)
+            {
+                throw new ArgumentNullException(nameof(selected));
+            }
+
+            var ordered = new List<int>(selected);
+            ordered.Sort();
+
+            var argb = new List<int>(ordered.Count);
+            var l = new List<double>(ordered.Count);
+            var a = new List<double>(ordered.Count);
+            var b = new List<double>(ordered.Count);
+            foreach (int index in ordered)
+            {
+                if (index < 0 || index >= Argb.Length)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(selected));
+                }
+
+                argb.Add(Argb[index]);
+                l.Add(L[index]);
+                a.Add(A[index]);
+                b.Add(B[index]);
+            }
+
+            return new CandidateSet(argb.ToArray(), l.ToArray(), a.ToArray(), b.ToArray());
+        }
 
         /// <summary>
         /// Finds the grid cell a CIELAB color falls in.
