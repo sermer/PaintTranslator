@@ -46,14 +46,19 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 areas,
                 context.CancellationToken);
 
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             int regionCount = valuesByRegion.Count;
             var parent = new int[regionCount];
             var neighbours = new List<HashSet<int>>(regionCount);
             for (int i = 0; i < regionCount; i++)
             {
-                if ((i & 4095) == 0)
+                if ((i & 4095) == 0 && context.CancellationToken.IsCancellationRequested)
                 {
-                    context.CancellationToken.ThrowIfCancellationRequested();
+                    return;
                 }
 
                 parent[i] = i;
@@ -61,6 +66,11 @@ namespace PaintTranslator.Imaging.Styles.Stages
             }
 
             BuildAdjacency(labels, strideInts, width, height, neighbours, context.CancellationToken);
+
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
 
             var pending = new SortedSet<(int Area, int Region)>();
             for (int i = 0; i < regionCount; i++)
@@ -73,7 +83,11 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             while (pending.Count > 0)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 (int _, int candidate) = pending.Min;
                 pending.Remove(pending.Min);
                 int source = Find(parent, candidate);
@@ -99,7 +113,11 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             for (int y = 0; y < height; y++)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -119,9 +137,14 @@ namespace PaintTranslator.Imaging.Styles.Stages
             List<int> areas,
             CancellationToken cancellationToken)
         {
+            var queue = new Queue<int>();
             for (int y = 0; y < height; y++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 for (int x = 0; x < width; x++)
                 {
                     int at = y * strideInts + x;
@@ -133,23 +156,36 @@ namespace PaintTranslator.Imaging.Styles.Stages
                     int region = values.Count;
                     int value = indices[at];
                     int area = 0;
-                    var queue = new Queue<(int X, int Y)>();
-                    queue.Enqueue((x, y));
+                    queue.Enqueue(at);
                     labels[at] = region;
 
                     while (queue.Count > 0)
                     {
-                        if ((area & 4095) == 0)
+                        if ((area & 4095) == 0 && cancellationToken.IsCancellationRequested)
                         {
-                            cancellationToken.ThrowIfCancellationRequested();
+                            return;
                         }
 
-                        (int currentX, int currentY) = queue.Dequeue();
+                        int current = queue.Dequeue();
+                        int currentY = current / strideInts;
+                        int currentX = current - (currentY * strideInts);
                         area++;
-                        TryEnqueue(currentX - 1, currentY, value, region, indices, labels, strideInts, width, height, queue);
-                        TryEnqueue(currentX + 1, currentY, value, region, indices, labels, strideInts, width, height, queue);
-                        TryEnqueue(currentX, currentY - 1, value, region, indices, labels, strideInts, width, height, queue);
-                        TryEnqueue(currentX, currentY + 1, value, region, indices, labels, strideInts, width, height, queue);
+                        if (currentX > 0)
+                        {
+                            TryEnqueue(current - 1, value, region, indices, labels, queue);
+                        }
+                        if (currentX + 1 < width)
+                        {
+                            TryEnqueue(current + 1, value, region, indices, labels, queue);
+                        }
+                        if (currentY > 0)
+                        {
+                            TryEnqueue(current - strideInts, value, region, indices, labels, queue);
+                        }
+                        if (currentY + 1 < height)
+                        {
+                            TryEnqueue(current + strideInts, value, region, indices, labels, queue);
+                        }
                     }
 
                     values.Add(value);
@@ -168,7 +204,11 @@ namespace PaintTranslator.Imaging.Styles.Stages
         {
             for (int y = 0; y < height; y++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -280,27 +320,12 @@ namespace PaintTranslator.Imaging.Styles.Stages
         }
 
         private static void TryEnqueue(
-            int x,
-            int y,
-            int value,
-            int region,
-            int[] indices,
-            int[] labels,
-            int strideInts,
-            int width,
-            int height,
-            Queue<(int X, int Y)> queue)
+            int at, int value, int region, int[] indices, int[] labels, Queue<int> queue)
         {
-            if (x < 0 || x >= width || y < 0 || y >= height)
-            {
-                return;
-            }
-
-            int at = y * strideInts + x;
             if (labels[at] < 0 && indices[at] == value)
             {
                 labels[at] = region;
-                queue.Enqueue((x, y));
+                queue.Enqueue(at);
             }
         }
     }

@@ -34,14 +34,11 @@ namespace PaintTranslator
         private bool suppressPaintCheckEvents;
 
         /// <summary>
-        /// The most recently loaded photo, kept unmodified and separate from the
-        /// displayed image so paint conversions always start from the original
-        /// pixels, even after a previous conversion has replaced the display.
+        /// Immutable pixels from the most recently loaded photo. Every conversion
+        /// starts from this frame, even after a prior result replaces the display.
         /// </summary>
-        private Bitmap sourcePhoto;
+        private SourceFrame sourceFrame;
 
-        /// <summary>Guards cloning and replacement of the full-resolution source.</summary>
-        private readonly object sourcePhotoSync = new object();
 
         /// <summary>
         /// The file name of the loaded photo, used to rebuild the window title
@@ -87,17 +84,15 @@ namespace PaintTranslator
         private Point lastCanvasCursor;
 
         /// <summary>
-        /// Set while a load or conversion is running. Both read or replace
-        /// <see cref="sourcePhoto"/>, so a second one starting mid-flight would dispose
-        /// the bitmap the first is still working from.
+        /// Set while an explicit load or conversion is running so conflicting UI
+        /// operations cannot replace the current result mid-flight.
         /// </summary>
         private bool imageOperationInProgress;
 
         /// <summary>
-        /// A source downsampled before conversion. Interactive frames use this bitmap;
-        /// the Convert button continues to render <see cref="sourcePhoto"/> itself.
+        /// An immutable downsampled frame used for responsive interactive previews.
         /// </summary>
-        private Bitmap previewPhoto;
+        private SourceFrame previewFrame;
 
         /// <summary>Debounces rapid slider ticks before starting a preview frame.</summary>
         private readonly System.Windows.Forms.Timer previewTimer;
@@ -227,13 +222,13 @@ namespace PaintTranslator
 
         /// <summary>
         /// Captures every input a worker needs without retaining mutable controls or
-        /// live parameter stores. Preview requests own their small source immediately;
-        /// automatic full requests defer that copy to the worker under the same lock
-        /// image replacement uses, so capturing a large image never stalls the UI.
+        /// live parameter stores. Requests retain immutable source frames, so image
+        /// replacement cannot invalidate an in-flight worker and no render needs to
+        /// clone a full-resolution GDI bitmap.
         /// </summary>
-        private ConversionRenderRequest CaptureRenderRequest(bool preview, bool copySource = false)
+        private ConversionRenderRequest CaptureRenderRequest(bool preview)
         {
-            Bitmap source = preview ? previewPhoto : sourcePhoto;
+            SourceFrame source = preview ? previewFrame : sourceFrame;
             if (source == null)
             {
                 return null;
@@ -251,25 +246,17 @@ namespace PaintTranslator
 
             int blurRadius = blurTrackBar.Value;
             int markPixels = markTrackBar.Value;
-            Bitmap requestSource = source;
-            bool ownsSource = false;
-            if (preview)
-            {
-                requestSource = new Bitmap(source);
-                ownsSource = true;
-            }
 
             if (preview)
             {
-                blurRadius = ConversionPreview.ScaleRadius(blurRadius, sourcePhoto.Size, requestSource.Size);
-                markPixels = ConversionPreview.ScaleRadius(markPixels, sourcePhoto.Size, requestSource.Size);
+                blurRadius = ConversionPreview.ScaleRadius(blurRadius, sourceFrame.Size, source.Size);
+                markPixels = ConversionPreview.ScaleRadius(markPixels, sourceFrame.Size, source.Size);
             }
 
             (StyleDefinition renderStyle, IReadOnlyDictionary<IPipelineStage, ParameterValues> renderValues) =
                 PalettePhotoConverter.ComposeWithBlur(style, values, blurRadius);
 
-            return new ConversionRenderRequest(
-                requestSource, ownsSource, copySource, paints, renderStyle,
+            return new ConversionRenderRequest(source, paints, renderStyle,
                 markPixels, renderValues, previewGeneration);
         }
 
@@ -278,32 +265,12 @@ namespace PaintTranslator
             ConversionRenderRequest request,
             CancellationToken cancellationToken = default)
         {
-            Bitmap workerSource = null;
-            try
-            {
-                Bitmap renderSource = request.Source;
-                if (request.CloneSourceOnWorker)
-                {
-                    lock (sourcePhotoSync)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        workerSource = new Bitmap(request.Source);
-                    }
-
-                    renderSource = workerSource;
-                }
-
-                CandidateSet candidates = candidateSetCache.GetOrCreate(
-                    request.Paints, request.Style, request.Values, cancellationToken);
-                return StylePipeline.Render(
-                    renderSource, request.Paints, request.Style, request.MarkPixels,
-                    request.Values, candidates, cancellationToken,
-                    colourMapCache: colourMapCache);
-            }
-            finally
-            {
-                workerSource?.Dispose();
-            }
+            CandidateSet candidates = candidateSetCache.GetOrCreate(
+                request.Paints, request.Style, request.Values, cancellationToken);
+            return StylePipeline.Render(
+                request.Source, request.Paints, request.Style, request.MarkPixels,
+                request.Values, candidates, cancellationToken,
+                colourMapCache: colourMapCache);
         }
 
         /// <summary>
@@ -312,7 +279,7 @@ namespace PaintTranslator
         /// </summary>
         private void SchedulePreview()
         {
-            if (suppressPreviewScheduling || sourcePhoto == null || previewPhoto == null ||
+            if (suppressPreviewScheduling || sourceFrame == null || previewFrame == null ||
                 wheelDisplayed || imageOperationInProgress || IsDisposed || Disposing)
             {
                 return;
@@ -359,7 +326,7 @@ namespace PaintTranslator
 
                     try
                     {
-                        using ConversionRenderRequest previewRequest = CaptureRenderRequest(preview: true);
+                        ConversionRenderRequest previewRequest = CaptureRenderRequest(preview: true);
                         if (previewRequest == null)
                         {
                             return;
@@ -367,6 +334,11 @@ namespace PaintTranslator
 
                         Bitmap previewResult = await RenderCapturedRequestAsync(
                             previewRequest, cancellation.Token);
+                        if (previewResult == null)
+                        {
+                            continue;
+                        }
+
                         if (!CanDisplayAutomaticResult(previewRequest, cancellation.Token))
                         {
                             previewResult.Dispose();
@@ -377,11 +349,10 @@ namespace PaintTranslator
                         wheelDisplayed = false;
                         Text = $"Paint Translator - {sourcePhotoName} (live preview)";
 
-                        // Ask the worker to own the full-resolution copy. Source replacement
-                        // shares its short lock, so the UI never performs the expensive clone
-                        // and neither operation can dispose/read the bitmap beneath the other.
-                        using ConversionRenderRequest fullRequest = CaptureRenderRequest(
-                            preview: false, copySource: true);
+                        // The immutable full frame can be shared directly with the worker;
+                        // loading another image merely replaces the form's reference and
+                        // cannot invalidate this request while it finishes or cancels.
+                        ConversionRenderRequest fullRequest = CaptureRenderRequest(preview: false);
                         if (fullRequest == null)
                         {
                             continue;
@@ -392,6 +363,11 @@ namespace PaintTranslator
                         {
                             Bitmap fullResult = await RenderCapturedRequestAsync(
                                 fullRequest, cancellation.Token);
+                            if (fullResult == null)
+                            {
+                                continue;
+                            }
+
                             if (CanDisplayAutomaticResult(fullRequest, cancellation.Token))
                             {
                                 SetDisplayedImage(fullResult);
@@ -462,14 +438,10 @@ namespace PaintTranslator
                 !Disposing;
         }
 
-        private sealed class ConversionRenderRequest : IDisposable
+        private sealed class ConversionRenderRequest
         {
-            private readonly bool ownsSource;
-
             public ConversionRenderRequest(
-                Bitmap source,
-                bool ownsSource,
-                bool cloneSourceOnWorker,
+                SourceFrame source,
                 IReadOnlyList<PigmentCoefficients> paints,
                 StyleDefinition style,
                 int markPixels,
@@ -477,8 +449,6 @@ namespace PaintTranslator
                 long generation)
             {
                 Source = source;
-                this.ownsSource = ownsSource;
-                CloneSourceOnWorker = cloneSourceOnWorker;
                 Paints = paints;
                 Style = style;
                 MarkPixels = markPixels;
@@ -486,21 +456,12 @@ namespace PaintTranslator
                 Generation = generation;
             }
 
-            public Bitmap Source { get; }
-            public bool CloneSourceOnWorker { get; }
+            public SourceFrame Source { get; }
             public IReadOnlyList<PigmentCoefficients> Paints { get; }
             public StyleDefinition Style { get; }
             public int MarkPixels { get; }
             public IReadOnlyDictionary<IPipelineStage, ParameterValues> Values { get; }
             public long Generation { get; }
-
-            public void Dispose()
-            {
-                if (ownsSource)
-                {
-                    Source.Dispose();
-                }
-            }
         }
 
         /// <summary>
@@ -991,7 +952,7 @@ namespace PaintTranslator
                     return;
                 }
 
-                AdoptSourcePhoto(loaded.Image, loaded.Name);
+                await AdoptSourcePhotoAsync(loaded.Image, loaded.Name);
                 adopted = true;
             }
             catch (Exception ex)
@@ -1012,24 +973,34 @@ namespace PaintTranslator
         /// <summary>
         /// Takes ownership of a freshly loaded photo and displays it.
         /// </summary>
-        /// <param name="photo">The loaded image. The form disposes it when the next photo
-        /// arrives.</param>
+        /// <param name="photo">The loaded image. The form snapshots and disposes it.</param>
         /// <param name="name">The name to show in the window title.</param>
-        private void AdoptSourcePhoto(Bitmap photo, string name)
+        private async Task AdoptSourcePhotoAsync(Bitmap photo, string name)
         {
             CancelPreview();
 
-            // Keep the original separate from the displayed copy: the display gets
-            // disposed on every image swap, while the original must survive as the
-            // source for conversions.
-            lock (sourcePhotoSync)
+            // Normalize both render inputs once. Subsequent workers share these
+            // immutable frames even after the form adopts a replacement image.
+            (SourceFrame Full, SourceFrame PreviewFrame) prepared;
+            try
             {
-                sourcePhoto?.Dispose();
-                sourcePhoto = photo;
+                prepared = await Task.Run(() =>
+                {
+                    SourceFrame full = SourceFrame.Create(photo);
+                    using Bitmap preview = ConversionPreview.CreateSource(photo);
+                    SourceFrame previewFrame = SourceFrame.Create(preview);
+                    return (full, previewFrame);
+                });
+            }
+            catch
+            {
+                photo.Dispose();
+                throw;
             }
 
-            previewPhoto?.Dispose();
-            previewPhoto = ConversionPreview.CreateSource(photo);
+            photo.Dispose();
+            sourceFrame = prepared.Full;
+            previewFrame = prepared.PreviewFrame;
             sourcePhotoName = name;
 
             // A brush covers a roughly constant fraction of a canvas whatever
@@ -1040,7 +1011,7 @@ namespace PaintTranslator
             try
             {
                 markTrackBar.Value = Math.Clamp(
-                    RenderContext.DefaultMarkPixels(photo.Width, photo.Height),
+                    RenderContext.DefaultMarkPixels(sourceFrame.Width, sourceFrame.Height),
                     markTrackBar.Minimum,
                     markTrackBar.Maximum);
             }
@@ -1049,7 +1020,7 @@ namespace PaintTranslator
                 suppressPreviewScheduling = false;
             }
 
-            SetDisplayedImage(new Bitmap(sourcePhoto));
+            SetDisplayedImage(sourceFrame.CreateBitmap());
             wheelDisplayed = false;
             Text = $"Paint Translator - {sourcePhotoName}";
             SchedulePreview();
@@ -1128,7 +1099,7 @@ namespace PaintTranslator
         /// <param name="e">The event arguments.</param>
         private async void ConvertPhotoButton_Click(object sender, EventArgs e)
         {
-            if (sourcePhoto == null)
+            if (sourceFrame == null)
             {
                 MessageBox.Show(this, "Load a photo first, then convert it.",
                     "No photo loaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -1136,7 +1107,7 @@ namespace PaintTranslator
             }
 
             CancelPreview();
-            using ConversionRenderRequest request = CaptureRenderRequest(preview: false);
+            ConversionRenderRequest request = CaptureRenderRequest(preview: false);
             if (request == null)
             {
                 MessageBox.Show(this, "Select at least one paint to convert with.",
@@ -1144,9 +1115,8 @@ namespace PaintTranslator
                 return;
             }
 
-            // Block image swaps while the background task reads sourcePhoto;
-            // loading a new photo mid-conversion would dispose it out from under
-            // the worker.
+            // Keep explicit image operations serialized so a load cannot replace
+            // the display while this result is being committed.
             SetImageOperationInProgress(true);
             try
             {
@@ -1775,19 +1745,8 @@ namespace PaintTranslator
         {
             CancelPreview();
             previewTimer.Dispose();
-            previewPhoto?.Dispose();
-            previewPhoto = null;
-
-            // A full render reads sourcePhoto directly and the process is already
-            // exiting this window; do not dispose it out from under that worker.
-            if (!imageOperationInProgress)
-            {
-                lock (sourcePhotoSync)
-                {
-                    sourcePhoto?.Dispose();
-                    sourcePhoto = null;
-                }
-            }
+            previewFrame = null;
+            sourceFrame = null;
 
             stageHeadingFont?.Dispose();
             stageHeadingFont = null;

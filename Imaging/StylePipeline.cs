@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using PaintTranslator.Imaging.Styles;
@@ -42,13 +40,35 @@ namespace PaintTranslator.Imaging
         /// the parameter values that stage should render with.</param>
         /// <param name="preparedCandidates">A palette-compatible set prepared by
         /// <see cref="PrepareCandidates"/>, or null to build it during this call.</param>
-        /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
+        /// <returns>A new 32-bit ARGB bitmap, or null when cancellation is observed
+        /// during cooperative post-map processing.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/>,
         /// <paramref name="paints"/>, <paramref name="style"/> or <paramref name="values"/>
         /// is null.</exception>
         /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
         internal static Bitmap Render(
             Bitmap source,
+            IReadOnlyList<PigmentCoefficients> paints,
+            StyleDefinition style,
+            int markPixels,
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
+            CandidateSet preparedCandidates = null,
+            CancellationToken cancellationToken = default,
+            RenderDiagnostics diagnostics = null,
+            ColourMapCache colourMapCache = null)
+        {
+            if (source == null)
+            {
+                throw new ArgumentNullException(nameof(source));
+            }
+
+            return Render(
+                SourceFrame.Create(source), paints, style, markPixels, values,
+                preparedCandidates, cancellationToken, diagnostics, colourMapCache);
+        }
+
+        internal static Bitmap Render(
+            SourceFrame source,
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
             int markPixels,
@@ -107,126 +127,98 @@ namespace PaintTranslator.Imaging
                 achievableMaxChromaByHue,
                 cancellationToken);
 
-            // Drawing into a fresh 32bpp ARGB bitmap normalizes whatever pixel
-            // format the photo arrived in, so the buffer below is always ARGB.
-            var result = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            Bitmap result = null;
+            phaseStarted = diagnostics?.Begin() ?? 0L;
+            int[] pixels = source.CopyPixels();
+            int strideInts = width;
+            diagnostics?.End("Source: copy pixels", phaseStarted);
+
             try
             {
-                phaseStarted = diagnostics?.Begin() ?? 0L;
-                using (var graphics = Graphics.FromImage(result))
-                {
-                    graphics.DrawImage(source, 0, 0, width, height);
-                }
-                diagnostics?.End("Source: normalize", phaseStarted);
-
                 cancellationToken.ThrowIfCancellationRequested();
-
-                BitmapData data = result.LockBits(
-                    new Rectangle(0, 0, width, height),
-                    ImageLockMode.ReadWrite,
-                    PixelFormat.Format32bppArgb);
-
-                try
+                foreach (IPreMapStage stage in style.PreMap)
                 {
-                    int strideInts = data.Stride / 4;
-                    var pixels = new int[strideInts * height];
+                    cancellationToken.ThrowIfCancellationRequested();
                     phaseStarted = diagnostics?.Begin() ?? 0L;
-                    Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-                    diagnostics?.End("Source: read pixels", phaseStarted);
-
-                    // Alpha is captured from the buffer as it arrived from the source,
-                    // before any stage below gets a chance to touch it, so the final
-                    // composite always carries the photo's own transparency regardless
-                    // of what a pre-map stage did to the colour channels.
-                    var sourceAlpha = new int[pixels.Length];
-                    phaseStarted = diagnostics?.Begin() ?? 0L;
-                    for (int i = 0; i < pixels.Length; i++)
-                    {
-                        if ((i & 16383) == 0)
-                        {
-                            cancellationToken.ThrowIfCancellationRequested();
-                        }
-
-                        sourceAlpha[i] = pixels[i] & unchecked((int)0xFF000000);
-                    }
-                    diagnostics?.End("Source: preserve alpha", phaseStarted);
-
-                    foreach (IPreMapStage stage in style.PreMap)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        phaseStarted = diagnostics?.Begin() ?? 0L;
-                        stage.Apply(pixels, strideInts, width, height, in context, values[stage]);
-                        diagnostics?.End("Pre-map: " + stage.DisplayName, phaseStarted);
-                    }
-
-                    if (style.Candidates is IImageAwareCandidateTransform imageAwareCandidates)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        phaseStarted = diagnostics?.Begin() ?? 0L;
-                        candidates = imageAwareCandidates.Transform(
-                            candidates, pixels, strideInts, width, height, in context, values[style.Candidates]);
-                        diagnostics?.End("Candidates: image-aware", phaseStarted);
-
-                        phaseStarted = diagnostics?.Begin() ?? 0L;
-                        achievableMaxChroma = candidates.MaximumChroma;
-                        context = new RenderContext(
-                            width,
-                            height,
-                            baseMark * style.MarkScale,
-                            achievableMaxChroma,
-                            candidates.MaximumChromaByHue,
-                            cancellationToken);
-                        diagnostics?.End("Candidates: image metadata", phaseStarted);
-                    }
-
-                    var indices = new int[strideInts * height];
-                    phaseStarted = diagnostics?.Begin() ?? 0L;
-                    if (style.Quantiser.IsPositionDependent)
-                    {
-                        ResolvePerPixel(pixels, indices, strideInts, width, height, style, values, candidates, context);
-                    }
-                    else
-                    {
-                        int[] resolved = colourMapCache?.GetOrCreate(candidates, style, values, in context);
-                        ResolveOncePerColour(
-                            pixels, indices, strideInts, width, height, style, values,
-                            candidates, context, resolved);
-                    }
-                    diagnostics?.End("Mapping", phaseStarted);
-
-                    foreach (IPostMapStage stage in style.PostMap)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        phaseStarted = diagnostics?.Begin() ?? 0L;
-                        stage.Refine(indices, strideInts, width, height, candidates, in context, values[stage]);
-                        diagnostics?.End("Post-map: " + stage.DisplayName, phaseStarted);
-                    }
-
-                    phaseStarted = diagnostics?.Begin() ?? 0L;
-                    for (int y = 0; y < height; y++)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        int row = y * strideInts;
-                        for (int x = 0; x < width; x++)
-                        {
-                            int at = row + x;
-                            pixels[at] = sourceAlpha[at] | (candidates.Argb[indices[at]] & 0x00FFFFFF);
-                        }
-                    }
-                    diagnostics?.End("Output: compose", phaseStarted);
-
-                    phaseStarted = diagnostics?.Begin() ?? 0L;
-                    Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
-                    diagnostics?.End("Output: write bitmap", phaseStarted);
+                    stage.Apply(pixels, strideInts, width, height, in context, values[stage]);
+                    diagnostics?.End("Pre-map: " + stage.DisplayName, phaseStarted);
                 }
-                finally
+
+                if (style.Candidates is IImageAwareCandidateTransform imageAwareCandidates)
                 {
-                    result.UnlockBits(data);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    candidates = imageAwareCandidates.Transform(
+                        candidates, pixels, strideInts, width, height, in context, values[style.Candidates]);
+                    diagnostics?.End("Candidates: image-aware", phaseStarted);
+
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    achievableMaxChroma = candidates.MaximumChroma;
+                    context = new RenderContext(
+                        width,
+                        height,
+                        baseMark * style.MarkScale,
+                        achievableMaxChroma,
+                        candidates.MaximumChromaByHue,
+                        cancellationToken);
+                    diagnostics?.End("Candidates: image metadata", phaseStarted);
                 }
+
+                var indices = new int[strideInts * height];
+                phaseStarted = diagnostics?.Begin() ?? 0L;
+                if (style.Quantiser.IsPositionDependent)
+                {
+                    ResolvePerPixel(pixels, indices, strideInts, width, height, style, values, candidates, context);
+                }
+                else
+                {
+                    int[] resolved = colourMapCache?.GetOrCreate(candidates, style, values, in context);
+                    ResolveOncePerColour(
+                        pixels, indices, strideInts, width, height, style, values,
+                        candidates, context, resolved);
+                }
+                diagnostics?.End("Mapping", phaseStarted);
+
+                foreach (IPostMapStage stage in style.PostMap)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
+
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    stage.Refine(indices, strideInts, width, height, candidates, in context, values[stage]);
+                    diagnostics?.End("Post-map: " + stage.DisplayName, phaseStarted);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
+                }
+
+                phaseStarted = diagnostics?.Begin() ?? 0L;
+                for (int y = 0; y < height; y++)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
+
+                    int row = y * strideInts;
+                    for (int x = 0; x < width; x++)
+                    {
+                        int at = row + x;
+                        pixels[at] = source.AlphaAt(at) | (candidates.Argb[indices[at]] & 0x00FFFFFF);
+                    }
+                }
+                diagnostics?.End("Output: compose", phaseStarted);
+
+                phaseStarted = diagnostics?.Begin() ?? 0L;
+                result = source.CreateBitmap(pixels);
+                diagnostics?.End("Output: write bitmap", phaseStarted);
             }
             catch
             {
-                result.Dispose();
+                result?.Dispose();
                 throw;
             }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Imaging.Styles.Stages;
@@ -37,6 +38,35 @@ namespace PaintTranslator.Tests
             {
                 Assert.True(area >= 4, $"region area {area} remained below mark²");
             }
+        }
+
+        [Fact]
+        public void CanceledRefinementStopsWithoutThrowing()
+        {
+            const int width = 3;
+            const int height = 3;
+            var indices = new[]
+            {
+                0, 1, 0,
+                1, 0, 1,
+                0, 1, 0,
+            };
+            var original = (int[])indices.Clone();
+            var candidates = new CandidateSet(
+                new[] { unchecked((int)0xFF202020), unchecked((int)0xFFC04040) },
+                new[] { 12.0, 52.0 },
+                new[] { 0.0, 45.0 },
+                new[] { 0.0, 25.0 });
+            var stage = new SmallRegionMerge();
+            var values = new ParameterValues(Array.Empty<StyleParameter>());
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            var context = new RenderContext(
+                width, height, 2.0, 50.0, null, cancellation.Token);
+
+            stage.Refine(indices, width, width, height, candidates, in context, values);
+
+            Assert.Equal(original, indices);
         }
 
         private static IReadOnlyList<int> RegionAreas(int[] indices, int width, int height)

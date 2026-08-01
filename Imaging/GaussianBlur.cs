@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Threading;
 using System.Threading.Tasks;
 using PaintTranslator.Pigments;
@@ -61,17 +62,25 @@ namespace PaintTranslator.Imaging
             // One channel at a time: the planes are the memory-hungry part of this, and
             // holding one channel's pair rather than all three keeps the peak at a third
             // of what a full-image float copy would need on a large photo.
-            var plane = new float[width * height];
-            var scratch = new float[width * height];
-
-            for (int shift = LinearPlanes.RedShift; shift >= LinearPlanes.BlueShift; shift -= 8)
+            int count = width * height;
+            float[] plane = ImageBufferPool.Float.Rent(count);
+            float[] scratch = ImageBufferPool.Float.Rent(count);
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                LinearPlanes.Decode(pixels, strideInts, width, height, shift, plane);
-                BlurHorizontal(plane, scratch, width, height, kernel, radius, cancellationToken);
-                BlurVertical(scratch, plane, width, height, kernel, radius, cancellationToken);
-                cancellationToken.ThrowIfCancellationRequested();
-                LinearPlanes.Encode(plane, pixels, strideInts, width, height, shift);
+                for (int shift = LinearPlanes.RedShift; shift >= LinearPlanes.BlueShift; shift -= 8)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    LinearPlanes.Decode(pixels, strideInts, width, height, shift, plane);
+                    BlurHorizontal(plane, scratch, width, height, kernel, radius, cancellationToken);
+                    BlurVertical(scratch, plane, width, height, kernel, radius, cancellationToken);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    LinearPlanes.Encode(plane, pixels, strideInts, width, height, shift);
+                }
+            }
+            finally
+            {
+                ImageBufferPool.Float.Return(plane);
+                ImageBufferPool.Float.Return(scratch);
             }
         }
 
@@ -172,7 +181,7 @@ namespace PaintTranslator.Imaging
             Parallel.For(0, height, new ParallelOptions
             {
                 CancellationToken = cancellationToken,
-            }, () => new double[width], (y, state, row) =>
+            }, () => ArrayPool<double>.Shared.Rent(width), (y, state, row) =>
             {
                 Array.Clear(row, 0, width);
 
@@ -194,7 +203,7 @@ namespace PaintTranslator.Imaging
 
                 return row;
             },
-            _ => { });
+            row => ArrayPool<double>.Shared.Return(row));
         }
     }
 }

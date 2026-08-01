@@ -40,20 +40,21 @@ namespace PaintTranslator.Benchmarks
                 : new[] { StyleRegistry.ByName(options.StyleName) };
 
             using Bitmap source = BuildNoisyGradient(options.Width, options.Height);
+            SourceFrame sourceFrame = SourceFrame.Create(source);
             Console.WriteLine(
                 $"source={options.Width}x{options.Height} paints={paints.Count} " +
                 $"iterations={options.Iterations} blur={options.BlurRadius} mark={options.MarkPixels}");
 
             foreach (StyleDefinition style in styles)
             {
-                RunStyle(source, paints, style, options);
+                RunStyle(sourceFrame, paints, style, options);
             }
 
             return 0;
         }
 
         private static void RunStyle(
-            Bitmap source,
+            SourceFrame source,
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
             Options options)
@@ -99,11 +100,10 @@ namespace PaintTranslator.Benchmarks
                 long allocated = GC.GetTotalAllocatedBytes(precise: false) - allocatedBefore;
                 totals.Add(stopwatch.Elapsed.TotalMilliseconds);
 
-                int checksum = result.GetPixel(0, 0).ToArgb()
-                    ^ result.GetPixel(result.Width - 1, result.Height - 1).ToArgb();
+                ulong checksum = Checksum(result);
                 Console.WriteLine(
                     $"  run={iteration} total={stopwatch.Elapsed.TotalMilliseconds:F2}ms " +
-                    $"allocated={allocated / (1024.0 * 1024.0):F1}MiB checksum={checksum:X8}");
+                    $"allocated={allocated / (1024.0 * 1024.0):F1}MiB checksum={checksum:X16}");
                 foreach (RenderPhaseTiming timing in diagnostics.Timings)
                 {
                     Console.WriteLine($"    {timing.Phase,-32} {timing.Elapsed.TotalMilliseconds,10:F2}ms");
@@ -122,6 +122,36 @@ namespace PaintTranslator.Benchmarks
             return (sorted.Count & 1) == 0
                 ? 0.5 * (sorted[middle - 1] + sorted[middle])
                 : sorted[middle];
+        }
+
+        private static ulong Checksum(Bitmap bitmap)
+        {
+            BitmapData data = bitmap.LockBits(
+                new Rectangle(0, 0, bitmap.Width, bitmap.Height),
+                ImageLockMode.ReadOnly,
+                PixelFormat.Format32bppArgb);
+            try
+            {
+                int strideInts = data.Stride / 4;
+                var pixels = new int[strideInts * bitmap.Height];
+                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+                ulong hash = 14695981039346656037UL;
+                for (int y = 0; y < bitmap.Height; y++)
+                {
+                    int row = y * strideInts;
+                    for (int x = 0; x < bitmap.Width; x++)
+                    {
+                        hash ^= (uint)pixels[row + x];
+                        hash *= 1099511628211UL;
+                    }
+                }
+
+                return hash;
+            }
+            finally
+            {
+                bitmap.UnlockBits(data);
+            }
         }
 
         private static Bitmap BuildNoisyGradient(int width, int height)
