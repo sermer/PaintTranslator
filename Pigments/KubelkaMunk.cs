@@ -124,6 +124,109 @@ namespace PaintTranslator.Pigments
         }
 
         /// <summary>
+        /// Mixes palette entries addressed by index and optionally folds one fixed
+        /// mother-colour fraction into the result. Candidate sampling calls this tens
+        /// of thousands of times; indexing the original palette avoids allocating a
+        /// new pigment array (and, for a mother colour, two more arrays) per sample.
+        /// </summary>
+        internal static void MixIndexed(
+            IReadOnlyList<PigmentCoefficients> palette,
+            IReadOnlyList<int> indices,
+            IReadOnlyList<double> concentrations,
+            int blendIndex,
+            double blendFraction,
+            double[] reflectance)
+        {
+            if (palette == null || indices == null || concentrations == null || reflectance == null)
+            {
+                throw new ArgumentNullException();
+            }
+            if (indices.Count == 0 || indices.Count != concentrations.Count)
+            {
+                throw new ArgumentException("Each paint index needs exactly one concentration.");
+            }
+            if (reflectance.Length != SpectralBands.Count)
+            {
+                throw new ArgumentException(
+                    $"The reflectance buffer must have {SpectralBands.Count} bands.", nameof(reflectance));
+            }
+            if (blendFraction < 0.0 || blendFraction > 1.0 || double.IsNaN(blendFraction) ||
+                (blendIndex >= 0 && blendIndex >= palette.Count))
+            {
+                throw new ArgumentOutOfRangeException(nameof(blendFraction));
+            }
+
+            int existingBlendSlot = -1;
+            double total = 0.0;
+            for (int i = 0; i < indices.Count; i++)
+            {
+                if (indices[i] < 0 || indices[i] >= palette.Count)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(indices));
+                }
+                if (concentrations[i] < 0.0 || double.IsNaN(concentrations[i]))
+                {
+                    throw new ArgumentException("Concentrations must be non-negative.", nameof(concentrations));
+                }
+
+                double adjusted = concentrations[i];
+                if (blendIndex >= 0 && blendFraction > 0.0)
+                {
+                    adjusted *= 1.0 - blendFraction;
+                    if (indices[i] == blendIndex)
+                    {
+                        existingBlendSlot = i;
+                        adjusted += blendFraction;
+                    }
+                }
+
+                total += adjusted;
+            }
+
+            bool appendBlend = blendIndex >= 0 && blendFraction > 0.0 && existingBlendSlot < 0;
+            if (appendBlend)
+            {
+                total += blendFraction;
+            }
+            if (total <= 0.0)
+            {
+                throw new ArgumentException("Concentrations must not all be zero.", nameof(concentrations));
+            }
+
+            for (int band = 0; band < SpectralBands.Count; band++)
+            {
+                double absorption = 0.0;
+                double scattering = 0.0;
+                for (int i = 0; i < indices.Count; i++)
+                {
+                    double adjusted = concentrations[i];
+                    if (blendIndex >= 0 && blendFraction > 0.0)
+                    {
+                        adjusted *= 1.0 - blendFraction;
+                        if (i == existingBlendSlot)
+                        {
+                            adjusted += blendFraction;
+                        }
+                    }
+
+                    double share = adjusted / total;
+                    PigmentCoefficients pigment = palette[indices[i]];
+                    absorption += share * pigment.Absorption[band];
+                    scattering += share * pigment.Scattering[band];
+                }
+
+                if (appendBlend)
+                {
+                    double share = blendFraction / total;
+                    absorption += share * palette[blendIndex].Absorption[band];
+                    scattering += share * palette[blendIndex].Scattering[band];
+                }
+
+                reflectance[band] = Invert(absorption, scattering);
+            }
+        }
+
+        /// <summary>
         /// Sums every paint's coefficients, giving the baseline a wedge mix adds to.
         /// </summary>
         /// <param name="pigments">The paints to sum.</param>

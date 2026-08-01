@@ -62,7 +62,8 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 pixels, strideInts, width, height,
                 PalettePhotoConverter.FloorRadius(context.MarkPixels),
                 values["edge"],
-                (int)values["strength"]);
+                (int)values["strength"],
+                context.CancellationToken);
         }
     }
 }

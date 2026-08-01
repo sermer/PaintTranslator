@@ -388,7 +388,7 @@ mark a human could execute.
 | Aerial perspective | Landscape depth | Two-handle gradient. **Not** neural monocular depth. **Narrowed 2026-07-31:** build the *lightness* ramp only — it holds on 8 of 8 landscapes, while chroma-with-distance runs backwards on 6 of 8 even after regressing out lightness, and hue-cool fails on 5 of 8. An `AtmosphericRamp` has been written and measured; it also cuts unpaintable share on 9 of 9 |
 | Anisotropic Kuwahara + structure tensor | Directional flattening, then stroke orientation and flow-based DoG | ~60 lines of shared infrastructure |
 | User-defined styles from disk | User extensibility | Nothing — the architecture allows it |
-| Debounced live preview | Usability with a dynamic slider panel | A downsampled preview path; a full convert is too slow per tick |
+| ~~Debounced live preview~~ **Built 2026-08-01** | 384px source-first preview, 125ms debounce, immutable latest-request-wins scheduling, and a palette candidate cache. Each settled change now follows its fast preview with a full-resolution render and swaps that result in only if it is still current; another change cooperatively cancels the obsolete full render at palette, filter, row, and region boundaries. Locally measured cached Debug preview frames: Realism 56ms, Tonalism 102ms, Abstract 174ms. `[verified]` | ~~A downsampled preview path; a full convert is too slow per tick~~ |
 | Converter/matcher metric divergence | Image and tooltip agreeing | A decision, not work. See the inherited-problems note below |
 
 **Rejected rather than deferred** — see "What not to build" above for the evidence: impasto,

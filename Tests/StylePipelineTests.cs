@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Threading;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Pigments;
@@ -18,6 +19,25 @@ namespace PaintTranslator.Tests
     /// </summary>
     public class StylePipelineTests
     {
+        [Fact]
+        public void RenderStopsBeforeAllocatingOutputWhenCancelled()
+        {
+            StyleDefinition style = StyleRegistry.Default;
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values =
+                StylePipeline.DefaultValues(style);
+            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() => StylePipeline.Render(
+                source,
+                ThreePaints(),
+                style,
+                0,
+                values,
+                cancellationToken: cancellation.Token));
+        }
+
         /// <summary>
         /// Realism is defined as the mandatory floor, an untouched colour mapping and
         /// plain nearest-candidate matching. Comparing <see cref="PalettePhotoConverter.Convert"/>
@@ -266,6 +286,21 @@ namespace PaintTranslator.Tests
                         $"pixel ({x},{y}) alpha differs: source had {expectedAlpha}, output had {actualAlpha}");
                 }
             }
+        }
+
+        [Fact]
+        public void PreparedCandidatesRenderIdenticallyToOneShotRendering()
+        {
+            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            StyleDefinition style = StyleRegistry.ByName("Realism");
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values = StylePipeline.DefaultValues(style);
+            CandidateSet prepared = StylePipeline.PrepareCandidates(paints, style, values);
+            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(48, 32);
+
+            using Bitmap oneShot = StylePipeline.Render(source, paints, style, 3, values);
+            using Bitmap reused = StylePipeline.Render(source, paints, style, 3, values, prepared);
+
+            AssertBitmapsIdentical(oneShot, reused);
         }
 
         private static IReadOnlyList<PigmentCoefficients> ThreePaints()

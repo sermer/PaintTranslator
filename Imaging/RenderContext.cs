@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 
 namespace PaintTranslator.Imaging
 {
@@ -65,13 +66,15 @@ namespace PaintTranslator.Imaging
             int height,
             double markPixels,
             double achievableMaxChroma,
-            double[] achievableMaxChromaByHue)
+            double[] achievableMaxChromaByHue,
+            CancellationToken cancellationToken = default)
         {
             Width = width;
             Height = height;
             MarkPixels = markPixels;
             AchievableMaxChroma = achievableMaxChroma;
             AchievableMaxChromaByHue = achievableMaxChromaByHue ?? UniformChromaCeiling(achievableMaxChroma);
+            CancellationToken = cancellationToken;
         }
 
         /// <summary>Gets the image width in pixels.</summary>
@@ -103,6 +106,13 @@ namespace PaintTranslator.Imaging
         /// Gets the largest CIELAB chroma found in each ten-degree hue sector.
         /// </summary>
         public double[] AchievableMaxChromaByHue { get; }
+
+        /// <summary>
+        /// Gets the signal that an interactive render has been superseded. Stages
+        /// poll it at row or region boundaries so abandoned full-size work releases
+        /// the render slot promptly.
+        /// </summary>
+        public CancellationToken CancellationToken { get; }
 
         /// <summary>
         /// Gets the candidate-set chroma ceiling for a CIELAB hue.

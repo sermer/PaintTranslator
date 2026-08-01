@@ -19,9 +19,12 @@ namespace PaintTranslator.Imaging.Styles.Stages
     /// </summary>
     internal sealed class MotherColourTransform : ICandidateTransform
     {
+        private static readonly StyleParameter FractionParameter =
+            new StyleParameter("fraction", "Mother colour", 0.0, 0.6, 0.0, "");
+
         private static readonly IReadOnlyList<StyleParameter> ParameterList = new[]
         {
-            new StyleParameter("fraction", "Mother colour", 0.0, 0.6, 0.0, ""),
+            FractionParameter,
         };
 
         /// <summary>Gets "Palette", the heading shown above this stage's controls.</summary>
@@ -29,6 +32,9 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
         /// <summary>Gets this stage's one parameter: the mother colour's share of every mixture.</summary>
         public IReadOnlyList<StyleParameter> Parameters => ParameterList;
+
+        /// <summary>Gets the mother-colour fraction, which changes every sampled mixture.</summary>
+        public IReadOnlyList<StyleParameter> BuildParameters { get; } = new[] { FractionParameter };
 
         /// <summary>
         /// Finds the palette's least chromatic paint and blends it into every mixture

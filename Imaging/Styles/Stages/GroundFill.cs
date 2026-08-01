@@ -30,6 +30,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             for (int y = 0; y < height; y++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 for (int x = 0; x < width; x++)
                 {
                     int at = (y * strideInts) + x;
@@ -51,6 +52,11 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
                     while (queue.Count > 0)
                     {
+                        if ((pixels.Count & 4095) == 0)
+                        {
+                            context.CancellationToken.ThrowIfCancellationRequested();
+                        }
+
                         (int currentX, int currentY) = queue.Dequeue();
                         int current = (currentY * strideInts) + currentX;
                         pixels.Add(current);
@@ -72,6 +78,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
             Region field = null;
             foreach (Region region in regions)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 if (!region.TouchesBorder || region.Pixels.Count < minimumArea)
                 {
                     continue;
@@ -92,9 +99,14 @@ namespace PaintTranslator.Imaging.Styles.Stages
             double targetChroma = Math.Min(chroma * 0.35, 25.0);
             double scale = chroma <= 1e-9 ? 0.0 : targetChroma / chroma;
             int replacement = candidates.FindNearest(58.0, field.A * scale, field.B * scale);
-            foreach (int pixel in field.Pixels)
+            for (int i = 0; i < field.Pixels.Count; i++)
             {
-                indices[pixel] = replacement;
+                if ((i & 4095) == 0)
+                {
+                    context.CancellationToken.ThrowIfCancellationRequested();
+                }
+
+                indices[field.Pixels[i]] = replacement;
             }
         }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using PaintTranslator.Pigments;
 
@@ -205,8 +206,9 @@ namespace PaintTranslator.Imaging.Styles
         /// applied to the deduplicated result afterward.
         /// </summary>
         /// <returns>The surviving candidates, indexed for nearest-colour search.</returns>
-        public CandidateSet Build()
+        public CandidateSet Build(CancellationToken cancellationToken = default)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             int count = paints.Count;
 
             // Enumerating the subsets up front turns three nested loops into two flat
@@ -217,6 +219,7 @@ namespace PaintTranslator.Imaging.Styles
             var triples = new List<(int First, int Second, int Third)>();
             for (int i = 0; i < count; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 for (int j = i + 1; j < count; j++)
                 {
                     pairs.Add((i, j));
@@ -231,10 +234,11 @@ namespace PaintTranslator.Imaging.Styles
             int pairBase = count;
             int tripleBase = pairBase + (pairs.Count * PairSamples);
             var sampled = new int[tripleBase + (triples.Count * perTriple)];
+            var parallelOptions = new ParallelOptions { CancellationToken = cancellationToken };
 
             // Each paint straight from the tube. A paint has no stored colour any more,
             // so even the unmixed swatch is the kernel evaluated at full concentration.
-            Parallel.For(0, count, () => new double[SpectralBands.Count], (i, state, reflectance) =>
+            Parallel.For(0, count, parallelOptions, () => new double[SpectralBands.Count], (i, state, reflectance) =>
             {
                 sampled[i] = RenderMixture(new[] { i }, new[] { 1.0 }, reflectance);
                 return reflectance;
@@ -242,7 +246,7 @@ namespace PaintTranslator.Imaging.Styles
             _ => { });
 
             // Every unordered pair, sampled along its mixing line.
-            Parallel.For(0, pairs.Count, () => new double[SpectralBands.Count], (p, state, reflectance) =>
+            Parallel.For(0, pairs.Count, parallelOptions, () => new double[SpectralBands.Count], (p, state, reflectance) =>
             {
                 (int first, int second) = pairs[p];
                 var baseIndices = new[] { first, second };
@@ -251,6 +255,11 @@ namespace PaintTranslator.Imaging.Styles
 
                 for (int sample = 1; sample <= PairSamples; sample++)
                 {
+                    if ((sample & 15) == 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+
                     double share = (double)sample / (PairSamples + 1);
                     baseShares[0] = 1.0 - share;
                     baseShares[1] = share;
@@ -267,7 +276,7 @@ namespace PaintTranslator.Imaging.Styles
             // its mixing triangle. Combined with the pair samples this leaves the
             // achievable gamut covered closely enough that the residual is below what
             // an 8-bit channel can express over most of it.
-            Parallel.For(0, triples.Count, () => new double[SpectralBands.Count], (t, state, reflectance) =>
+            Parallel.For(0, triples.Count, parallelOptions, () => new double[SpectralBands.Count], (t, state, reflectance) =>
             {
                 (int first, int second, int third) = triples[t];
                 var baseIndices = new[] { first, second, third };
@@ -278,6 +287,7 @@ namespace PaintTranslator.Imaging.Styles
                 // paints present; the boundary is covered by the pair samples above.
                 for (int x = 1; x < TripleDivisions; x++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     for (int y = 1; y < TripleDivisions - x; y++)
                     {
                         baseShares[0] = (double)x / TripleDivisions;
@@ -298,8 +308,14 @@ namespace PaintTranslator.Imaging.Styles
             // of what was just computed collapses away here.
             var seen = new HashSet<int>(sampled.Length);
             var argbs = new List<int>();
-            foreach (int argb in sampled)
+            for (int i = 0; i < sampled.Length; i++)
             {
+                if ((i & 4095) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
+                int argb = sampled[i];
                 if (seen.Add(argb))
                 {
                     argbs.Add(argb);
@@ -315,6 +331,11 @@ namespace PaintTranslator.Imaging.Styles
             var b = new double[argbArray.Length];
             for (int i = 0; i < argbArray.Length; i++)
             {
+                if ((i & 4095) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 int argb = argbArray[i];
                 PalettePhotoConverter.RgbToLab(
                     (argb >> 16) & 0xFF, (argb >> 8) & 0xFF, argb & 0xFF, out l[i], out a[i], out b[i]);
@@ -331,6 +352,11 @@ namespace PaintTranslator.Imaging.Styles
             var keptB = new List<double>();
             for (int i = 0; i < argbArray.Length; i++)
             {
+                if ((i & 4095) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 if (keepPredicate(l[i], a[i], b[i]))
                 {
                     keptArgb.Add(argbArray[i]);
@@ -365,70 +391,10 @@ namespace PaintTranslator.Imaging.Styles
         /// <returns>The mixture's 32-bit ARGB value.</returns>
         private int RenderMixture(int[] baseIndices, double[] baseShares, double[] reflectance)
         {
-            ApplyBlend(baseIndices, baseShares, out int[] indices, out double[] shares);
-
-            var subset = new PigmentCoefficients[indices.Length];
-            for (int i = 0; i < indices.Length; i++)
-            {
-                subset[i] = paints[indices[i]];
-            }
-
-            KubelkaMunk.Mix(subset, shares, reflectance);
+            KubelkaMunk.MixIndexed(
+                paints, baseIndices, baseShares, blendPaintIndex, blendFraction, reflectance);
             return SpectralRenderer.ToDisplayColor(reflectance, out _).ToArgb();
         }
 
-        /// <summary>
-        /// Folds the configured blend, if any, into one mixture's paints and shares.
-        /// </summary>
-        /// <param name="baseIndices">The unmodified sample's paint indices.</param>
-        /// <param name="baseShares">The unmodified sample's shares, index-aligned
-        /// with <paramref name="baseIndices"/>.</param>
-        /// <param name="indices">The resulting paint indices, with the blend paint
-        /// folded in.</param>
-        /// <param name="shares">The resulting shares, index-aligned with
-        /// <paramref name="indices"/> and still summing to 1.</param>
-        private void ApplyBlend(
-            int[] baseIndices, double[] baseShares, out int[] indices, out double[] shares)
-        {
-            // Fraction zero returns the caller's own arrays rather than renormalising
-            // through an identity multiplication, so the no-op is local: it holds
-            // because no arithmetic runs at all, not because zero happens to be
-            // absorbing for however KubelkaMunk.Mix treats a zero-weight term today.
-            if (blendPaintIndex < 0 || blendFraction == 0.0)
-            {
-                indices = baseIndices;
-                shares = baseShares;
-                return;
-            }
-
-            int existingSlot = Array.IndexOf(baseIndices, blendPaintIndex);
-            if (existingSlot >= 0)
-            {
-                // Already present: renormalise every share including its own, then add
-                // the fraction on top, rather than listing the same paint twice.
-                indices = baseIndices;
-                shares = new double[baseShares.Length];
-                for (int i = 0; i < shares.Length; i++)
-                {
-                    shares[i] = baseShares[i] * (1.0 - blendFraction);
-                }
-
-                shares[existingSlot] += blendFraction;
-            }
-            else
-            {
-                indices = new int[baseIndices.Length + 1];
-                Array.Copy(baseIndices, indices, baseIndices.Length);
-                indices[baseIndices.Length] = blendPaintIndex;
-
-                shares = new double[baseShares.Length + 1];
-                for (int i = 0; i < baseShares.Length; i++)
-                {
-                    shares[i] = baseShares[i] * (1.0 - blendFraction);
-                }
-
-                shares[baseShares.Length] = blendFraction;
-            }
-        }
     }
 }

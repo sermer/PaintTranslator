@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Pigments;
@@ -26,9 +27,10 @@ namespace PaintTranslator.Imaging
     internal static class StylePipeline
     {
         /// <summary>
-        /// Renders a photo through one style: builds that style's candidate set,
+        /// Renders a photo through one style: obtains that style's candidate set,
         /// filters and maps the pixel buffer through its stages in slot order, and
-        /// writes the result into a fresh bitmap.
+        /// writes the result into a fresh bitmap. A caller may supply a prepared set;
+        /// otherwise this method builds one as before.
         /// </summary>
         /// <param name="source">The photo to convert; it is not modified.</param>
         /// <param name="paints">The paints available for mixing.</param>
@@ -38,6 +40,8 @@ namespace PaintTranslator.Imaging
         /// less derives it from the image's own dimensions.</param>
         /// <param name="values">Each of <paramref name="style"/>'s stages, mapped to
         /// the parameter values that stage should render with.</param>
+        /// <param name="preparedCandidates">A palette-compatible set prepared by
+        /// <see cref="PrepareCandidates"/>, or null to build it during this call.</param>
         /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/>,
         /// <paramref name="paints"/>, <paramref name="style"/> or <paramref name="values"/>
@@ -48,7 +52,11 @@ namespace PaintTranslator.Imaging
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
             int markPixels,
-            IReadOnlyDictionary<IPipelineStage, ParameterValues> values)
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
+            CandidateSet preparedCandidates = null,
+            CancellationToken cancellationToken = default,
+            RenderDiagnostics diagnostics = null,
+            ColourMapCache colourMapCache = null)
         {
             if (source == null)
             {
@@ -74,12 +82,15 @@ namespace PaintTranslator.Imaging
             // The candidate transform can only narrow or reshape which mixtures get
             // sampled, so it has to run before Build() rather than after — there is
             // no way to remove a candidate once it has already become a colour.
-            var builder = new MixtureBuilder(paints);
-            style.Candidates.Transform(builder, values[style.Candidates]);
-            CandidateSet candidates = builder.Build();
+            cancellationToken.ThrowIfCancellationRequested();
+            long phaseStarted = diagnostics?.Begin() ?? 0L;
+            CandidateSet candidates = preparedCandidates ?? PrepareCandidates(paints, style, values, cancellationToken);
+            diagnostics?.End(preparedCandidates == null ? "Candidates: build" : "Candidates: reuse", phaseStarted);
 
-            double achievableMaxChroma = MaximumChroma(candidates);
-            double[] achievableMaxChromaByHue = MaximumChromaByHue(candidates, achievableMaxChroma);
+            phaseStarted = diagnostics?.Begin() ?? 0L;
+            double achievableMaxChroma = candidates.MaximumChroma;
+            double[] achievableMaxChromaByHue = candidates.MaximumChromaByHue;
+            diagnostics?.End("Candidates: metadata", phaseStarted);
 
             int width = source.Width;
             int height = source.Height;
@@ -93,88 +104,168 @@ namespace PaintTranslator.Imaging
                 height,
                 baseMark * style.MarkScale,
                 achievableMaxChroma,
-                achievableMaxChromaByHue);
+                achievableMaxChromaByHue,
+                cancellationToken);
 
             // Drawing into a fresh 32bpp ARGB bitmap normalizes whatever pixel
             // format the photo arrived in, so the buffer below is always ARGB.
             var result = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            using (var graphics = Graphics.FromImage(result))
-            {
-                graphics.DrawImage(source, 0, 0, width, height);
-            }
-
-            BitmapData data = result.LockBits(
-                new Rectangle(0, 0, width, height),
-                ImageLockMode.ReadWrite,
-                PixelFormat.Format32bppArgb);
-
             try
             {
-                int strideInts = data.Stride / 4;
-                var pixels = new int[strideInts * height];
-                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-
-                // Alpha is captured from the buffer as it arrived from the source,
-                // before any stage below gets a chance to touch it, so the final
-                // composite always carries the photo's own transparency regardless
-                // of what a pre-map stage did to the colour channels.
-                var sourceAlpha = new int[pixels.Length];
-                for (int i = 0; i < pixels.Length; i++)
+                phaseStarted = diagnostics?.Begin() ?? 0L;
+                using (var graphics = Graphics.FromImage(result))
                 {
-                    sourceAlpha[i] = pixels[i] & unchecked((int)0xFF000000);
+                    graphics.DrawImage(source, 0, 0, width, height);
                 }
+                diagnostics?.End("Source: normalize", phaseStarted);
 
-                foreach (IPreMapStage stage in style.PreMap)
-                {
-                    stage.Apply(pixels, strideInts, width, height, in context, values[stage]);
-                }
+                cancellationToken.ThrowIfCancellationRequested();
 
-                if (style.Candidates is IImageAwareCandidateTransform imageAwareCandidates)
-                {
-                    candidates = imageAwareCandidates.Transform(
-                        candidates, pixels, strideInts, width, height, in context, values[style.Candidates]);
-                    achievableMaxChroma = MaximumChroma(candidates);
-                    context = new RenderContext(
-                        width,
-                        height,
-                        baseMark * style.MarkScale,
-                        achievableMaxChroma,
-                        MaximumChromaByHue(candidates, achievableMaxChroma));
-                }
+                BitmapData data = result.LockBits(
+                    new Rectangle(0, 0, width, height),
+                    ImageLockMode.ReadWrite,
+                    PixelFormat.Format32bppArgb);
 
-                var indices = new int[strideInts * height];
-                if (style.Quantiser.IsPositionDependent)
+                try
                 {
-                    ResolvePerPixel(pixels, indices, strideInts, width, height, style, values, candidates, context);
-                }
-                else
-                {
-                    ResolveOncePerColour(pixels, indices, strideInts, width, height, style, values, candidates, context);
-                }
+                    int strideInts = data.Stride / 4;
+                    var pixels = new int[strideInts * height];
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+                    diagnostics?.End("Source: read pixels", phaseStarted);
 
-                foreach (IPostMapStage stage in style.PostMap)
-                {
-                    stage.Refine(indices, strideInts, width, height, candidates, in context, values[stage]);
-                }
-
-                for (int y = 0; y < height; y++)
-                {
-                    int row = y * strideInts;
-                    for (int x = 0; x < width; x++)
+                    // Alpha is captured from the buffer as it arrived from the source,
+                    // before any stage below gets a chance to touch it, so the final
+                    // composite always carries the photo's own transparency regardless
+                    // of what a pre-map stage did to the colour channels.
+                    var sourceAlpha = new int[pixels.Length];
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    for (int i = 0; i < pixels.Length; i++)
                     {
-                        int at = row + x;
-                        pixels[at] = sourceAlpha[at] | (candidates.Argb[indices[at]] & 0x00FFFFFF);
-                    }
-                }
+                        if ((i & 16383) == 0)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
 
-                Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+                        sourceAlpha[i] = pixels[i] & unchecked((int)0xFF000000);
+                    }
+                    diagnostics?.End("Source: preserve alpha", phaseStarted);
+
+                    foreach (IPreMapStage stage in style.PreMap)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        phaseStarted = diagnostics?.Begin() ?? 0L;
+                        stage.Apply(pixels, strideInts, width, height, in context, values[stage]);
+                        diagnostics?.End("Pre-map: " + stage.DisplayName, phaseStarted);
+                    }
+
+                    if (style.Candidates is IImageAwareCandidateTransform imageAwareCandidates)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        phaseStarted = diagnostics?.Begin() ?? 0L;
+                        candidates = imageAwareCandidates.Transform(
+                            candidates, pixels, strideInts, width, height, in context, values[style.Candidates]);
+                        diagnostics?.End("Candidates: image-aware", phaseStarted);
+
+                        phaseStarted = diagnostics?.Begin() ?? 0L;
+                        achievableMaxChroma = candidates.MaximumChroma;
+                        context = new RenderContext(
+                            width,
+                            height,
+                            baseMark * style.MarkScale,
+                            achievableMaxChroma,
+                            candidates.MaximumChromaByHue,
+                            cancellationToken);
+                        diagnostics?.End("Candidates: image metadata", phaseStarted);
+                    }
+
+                    var indices = new int[strideInts * height];
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    if (style.Quantiser.IsPositionDependent)
+                    {
+                        ResolvePerPixel(pixels, indices, strideInts, width, height, style, values, candidates, context);
+                    }
+                    else
+                    {
+                        int[] resolved = colourMapCache?.GetOrCreate(candidates, style, values, in context);
+                        ResolveOncePerColour(
+                            pixels, indices, strideInts, width, height, style, values,
+                            candidates, context, resolved);
+                    }
+                    diagnostics?.End("Mapping", phaseStarted);
+
+                    foreach (IPostMapStage stage in style.PostMap)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        phaseStarted = diagnostics?.Begin() ?? 0L;
+                        stage.Refine(indices, strideInts, width, height, candidates, in context, values[stage]);
+                        diagnostics?.End("Post-map: " + stage.DisplayName, phaseStarted);
+                    }
+
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    for (int y = 0; y < height; y++)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        int row = y * strideInts;
+                        for (int x = 0; x < width; x++)
+                        {
+                            int at = row + x;
+                            pixels[at] = sourceAlpha[at] | (candidates.Argb[indices[at]] & 0x00FFFFFF);
+                        }
+                    }
+                    diagnostics?.End("Output: compose", phaseStarted);
+
+                    phaseStarted = diagnostics?.Begin() ?? 0L;
+                    Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+                    diagnostics?.End("Output: write bitmap", phaseStarted);
+                }
+                finally
+                {
+                    result.UnlockBits(data);
+                }
             }
-            finally
+            catch
             {
-                result.UnlockBits(data);
+                result.Dispose();
+                throw;
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Samples and indexes the gamut produced by a style's palette transform.
+        /// This is separated from <see cref="Render"/> because it depends only on the
+        /// chosen paints and the transform's build parameters, not on the image.
+        /// </summary>
+        internal static CandidateSet PrepareCandidates(
+            IReadOnlyList<PigmentCoefficients> paints,
+            StyleDefinition style,
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
+            CancellationToken cancellationToken = default)
+        {
+            if (paints == null)
+            {
+                throw new ArgumentNullException(nameof(paints));
+            }
+            if (paints.Count == 0)
+            {
+                throw new ArgumentException("At least one paint is required.", nameof(paints));
+            }
+            if (style == null)
+            {
+                throw new ArgumentNullException(nameof(style));
+            }
+            if (values == null)
+            {
+                throw new ArgumentNullException(nameof(values));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            var builder = new MixtureBuilder(paints);
+            style.Candidates.Transform(builder, values[style.Candidates]);
+            cancellationToken.ThrowIfCancellationRequested();
+            return builder.Build(cancellationToken);
         }
 
         /// <summary>
@@ -218,6 +309,42 @@ namespace PaintTranslator.Imaging
         }
 
         /// <summary>
+        /// Deep-copies every stage's values for one render. The outer dictionary and
+        /// each <see cref="ParameterValues"/> are independent of the UI's live stores,
+        /// so a worker observes one coherent frame even when another slider moves.
+        /// </summary>
+        internal static IReadOnlyDictionary<IPipelineStage, ParameterValues> SnapshotValues(
+            StyleDefinition style,
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values)
+        {
+            if (style == null)
+            {
+                throw new ArgumentNullException(nameof(style));
+            }
+            if (values == null)
+            {
+                throw new ArgumentNullException(nameof(values));
+            }
+
+            var snapshot = new Dictionary<IPipelineStage, ParameterValues>();
+            foreach (IPreMapStage stage in style.PreMap)
+            {
+                snapshot[stage] = values[stage].Snapshot();
+            }
+
+            snapshot[style.Remap] = values[style.Remap].Snapshot();
+            snapshot[style.Candidates] = values[style.Candidates].Snapshot();
+            snapshot[style.Quantiser] = values[style.Quantiser].Snapshot();
+
+            foreach (IPostMapStage stage in style.PostMap)
+            {
+                snapshot[stage] = values[stage].Snapshot();
+            }
+
+            return snapshot;
+        }
+
+        /// <summary>
         /// Resolves one candidate index per distinct quantized colour and fans that
         /// answer out to every pixel sharing it, which is sound only because a
         /// position-independent quantiser is defined to give the same answer to the
@@ -235,13 +362,21 @@ namespace PaintTranslator.Imaging
         private static void ResolveOncePerColour(
             int[] pixels, int[] indices, int strideInts, int width, int height,
             StyleDefinition style, IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
-            CandidateSet candidates, RenderContext context)
+            CandidateSet candidates, RenderContext context,
+            int[] resolved)
         {
+            if (resolved == null)
+            {
+                resolved = new int[ColorQuantization.CacheSize];
+                Array.Fill(resolved, -1);
+            }
+
             // First pass: mark which quantized colours actually occur, so the remap
             // and quantiser run once per distinct colour instead of once per pixel.
             var used = new bool[ColorQuantization.CacheSize];
             for (int y = 0; y < height; y++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -252,6 +387,11 @@ namespace PaintTranslator.Imaging
             var keys = new List<int>();
             for (int key = 0; key < ColorQuantization.CacheSize; key++)
             {
+                if ((key & 4095) == 0)
+                {
+                    context.CancellationToken.ThrowIfCancellationRequested();
+                }
+
                 if (used[key])
                 {
                     keys.Add(key);
@@ -263,10 +403,17 @@ namespace PaintTranslator.Imaging
 
             // Resolve every distinct colour in parallel; each entry is written by
             // exactly one iteration, so the shared array needs no locking.
-            var resolved = new int[ColorQuantization.CacheSize];
-            Parallel.For(0, keys.Count, i =>
+            Parallel.For(0, keys.Count, new ParallelOptions
+            {
+                CancellationToken = context.CancellationToken,
+            }, i =>
             {
                 int key = keys[i];
+                if (resolved[key] >= 0)
+                {
+                    return;
+                }
+
                 ColorQuantization.KeyToRgb(key, out int r, out int g, out int b);
                 PalettePhotoConverter.RgbToLab(r, g, b, out double l, out double a, out double bStar);
 
@@ -281,6 +428,7 @@ namespace PaintTranslator.Imaging
             // Second pass: fan the per-colour answer out to every pixel.
             for (int y = 0; y < height; y++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -311,7 +459,10 @@ namespace PaintTranslator.Imaging
             ParameterValues remapValues = values[style.Remap];
             ParameterValues quantiserValues = values[style.Quantiser];
 
-            Parallel.For(0, height, y =>
+            Parallel.For(0, height, new ParallelOptions
+            {
+                CancellationToken = context.CancellationToken,
+            }, y =>
             {
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
@@ -334,11 +485,18 @@ namespace PaintTranslator.Imaging
         /// <param name="candidates">The achievable-gamut colours to scan.</param>
         /// <returns>The largest CIELAB C*ab among <paramref name="candidates"/>, or
         /// zero when it is empty.</returns>
-        private static double MaximumChroma(CandidateSet candidates)
+        private static double MaximumChroma(
+            CandidateSet candidates,
+            CancellationToken cancellationToken = default)
         {
             double largest = 0.0;
             for (int i = 0; i < candidates.Argb.Length; i++)
             {
+                if ((i & 4095) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 double chroma = Math.Sqrt((candidates.A[i] * candidates.A[i]) + (candidates.B[i] * candidates.B[i]));
                 largest = Math.Max(largest, chroma);
             }
@@ -352,12 +510,20 @@ namespace PaintTranslator.Imaging
         /// never makes the remap divide by a zero ceiling for an otherwise chromatic
         /// source colour.
         /// </summary>
-        private static double[] MaximumChromaByHue(CandidateSet candidates, double fallback)
+        private static double[] MaximumChromaByHue(
+            CandidateSet candidates,
+            double fallback,
+            CancellationToken cancellationToken = default)
         {
             var ceilings = new double[RenderContext.HueSectorCount];
             var populated = new bool[ceilings.Length];
             for (int i = 0; i < candidates.Argb.Length; i++)
             {
+                if ((i & 4095) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 double chroma = Math.Sqrt((candidates.A[i] * candidates.A[i]) + (candidates.B[i] * candidates.B[i]));
                 if (chroma <= 1e-9)
                 {

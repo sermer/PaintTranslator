@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Pigments;
@@ -15,6 +16,16 @@ namespace PaintTranslator.Tests
     /// </summary>
     public class MixtureBuilderTests
     {
+        [Fact]
+        public void BuildStopsBeforeSamplingWhenCancelled()
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            Assert.Throws<OperationCanceledException>(
+                () => new MixtureBuilder(ThreePaints()).Build(cancellation.Token));
+        }
+
         [Fact]
         public void AnUntouchedBuilderMatchesTheConverterSOwnSampling()
         {

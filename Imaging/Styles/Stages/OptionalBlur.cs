@@ -51,7 +51,8 @@ namespace PaintTranslator.Imaging.Styles.Stages
             int[] pixels, int strideInts, int width, int height,
             in RenderContext context, ParameterValues values)
         {
-            GaussianBlur.Apply(pixels, strideInts, width, height, (int)values["radius"]);
+            GaussianBlur.Apply(
+                pixels, strideInts, width, height, (int)values["radius"], context.CancellationToken);
         }
     }
 }

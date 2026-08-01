@@ -73,6 +73,23 @@ namespace PaintTranslator.Imaging.Styles
         }
 
         /// <summary>
+        /// Copies the current values into an independent store. Rendering happens on a
+        /// worker while the UI remains free to move sliders, so handing that worker the
+        /// live dictionary would let one frame observe two different slider positions.
+        /// </summary>
+        /// <returns>A value-for-value copy that can be read safely while this instance changes.</returns>
+        public ParameterValues Snapshot()
+        {
+            var snapshot = new ParameterValues(Parameters);
+            foreach (StyleParameter parameter in Parameters)
+            {
+                snapshot.values[parameter.Id] = values[parameter.Id];
+            }
+
+            return snapshot;
+        }
+
+        /// <summary>
         /// Restores every parameter to the value its declaration names as the default.
         /// <para>
         /// Clamped the same way <see cref="Set"/> clamps, rather than assigned directly:

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace PaintTranslator.Imaging
@@ -54,7 +55,8 @@ namespace PaintTranslator.Imaging
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="pixels"/> is null.</exception>
         public static void Apply(
             int[] pixels, int strideInts, int width, int height,
-            int radius, double edgeThreshold, int iterations)
+            int radius, double edgeThreshold, int iterations,
+            CancellationToken cancellationToken = default)
         {
             if (pixels == null)
             {
@@ -64,6 +66,8 @@ namespace PaintTranslator.Imaging
             {
                 return;
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             // Comparing against a variance, not against a difference, so the threshold
             // is squared exactly once here rather than at every pixel.
@@ -81,21 +85,33 @@ namespace PaintTranslator.Imaging
 
             for (int shift = LinearPlanes.RedShift; shift >= LinearPlanes.BlueShift; shift -= 8)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 LinearPlanes.Decode(pixels, strideInts, width, height, shift, image);
 
                 for (int pass = 0; pass < iterations; pass++)
                 {
-                    BoxFilter(image, mean, scratch, width, height, radius);
+                    cancellationToken.ThrowIfCancellationRequested();
+                    BoxFilter(image, mean, scratch, width, height, radius, cancellationToken);
 
                     for (int i = 0; i < count; i++)
                     {
+                        if ((i & 16383) == 0)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+
                         correlation[i] = image[i] * image[i];
                     }
 
-                    BoxFilter(correlation, correlation, scratch, width, height, radius);
+                    BoxFilter(correlation, correlation, scratch, width, height, radius, cancellationToken);
 
                     for (int i = 0; i < count; i++)
                     {
+                        if ((i & 16383) == 0)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+
                         // Clamped at zero because the two box filters are computed
                         // independently and their difference can land a hair below it
                         // on a perfectly flat region.
@@ -105,15 +121,21 @@ namespace PaintTranslator.Imaging
                         offset[i] = (float)((1.0 - a) * mean[i]);
                     }
 
-                    BoxFilter(slope, slope, scratch, width, height, radius);
-                    BoxFilter(offset, offset, scratch, width, height, radius);
+                    BoxFilter(slope, slope, scratch, width, height, radius, cancellationToken);
+                    BoxFilter(offset, offset, scratch, width, height, radius, cancellationToken);
 
                     for (int i = 0; i < count; i++)
                     {
+                        if ((i & 16383) == 0)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+
                         image[i] = (slope[i] * image[i]) + offset[i];
                     }
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 LinearPlanes.Encode(image, pixels, strideInts, width, height, shift);
             }
         }
@@ -134,9 +156,18 @@ namespace PaintTranslator.Imaging
         /// <param name="height">The image height in pixels.</param>
         /// <param name="radius">The window radius in pixels.</param>
         private static void BoxFilter(
-            float[] source, float[] destination, float[] scratch, int width, int height, int radius)
+            float[] source,
+            float[] destination,
+            float[] scratch,
+            int width,
+            int height,
+            int radius,
+            CancellationToken cancellationToken)
         {
-            Parallel.For(0, height, y =>
+            Parallel.For(0, height, new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+            }, y =>
             {
                 int row = y * width;
                 double running = 0.0;
@@ -164,7 +195,10 @@ namespace PaintTranslator.Imaging
                 }
             });
 
-            Parallel.For(0, width, x =>
+            Parallel.For(0, width, new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+            }, x =>
             {
                 double running = 0.0;
                 for (int y = 0; y < Math.Min(radius + 1, height); y++)

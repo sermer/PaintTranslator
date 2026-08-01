@@ -131,6 +131,47 @@ namespace PaintTranslator.Tests
             }
         }
 
+        [Fact]
+        public void IndexedMixMatchesTheGeneralKernelWithoutABlend()
+        {
+            var palette = new[]
+            {
+                Paint("Titanium White"),
+                Paint("Diarylide Yellow"),
+                Paint("Phthalo Blue (G.S.)"),
+            };
+            var expected = new double[SpectralBands.Count];
+
+            KubelkaMunk.Mix(new[] { palette[0], palette[2] }, new[] { 0.35, 0.65 }, expected);
+            KubelkaMunk.MixIndexed(
+                palette, new[] { 0, 2 }, new[] { 0.35, 0.65 }, -1, 0.0, this.reflectance);
+
+            AssertSpectraEqual(expected, this.reflectance);
+        }
+
+        [Fact]
+        public void IndexedMixFoldsAnExistingOrNewMotherColourWithoutAllocatingASubset()
+        {
+            var palette = new[]
+            {
+                Paint("Titanium White"),
+                Paint("Diarylide Yellow"),
+                Paint("Phthalo Blue (G.S.)"),
+            };
+            var expected = new double[SpectralBands.Count];
+
+            KubelkaMunk.Mix(new[] { palette[0], palette[1] }, new[] { 0.24, 0.76 }, expected);
+            KubelkaMunk.MixIndexed(
+                palette, new[] { 0, 1 }, new[] { 0.3, 0.7 }, 1, 0.2, this.reflectance);
+            AssertSpectraEqual(expected, this.reflectance);
+
+            KubelkaMunk.Mix(
+                new[] { palette[0], palette[1], palette[2] }, new[] { 0.24, 0.56, 0.2 }, expected);
+            KubelkaMunk.MixIndexed(
+                palette, new[] { 0, 1 }, new[] { 0.3, 0.7 }, 2, 0.2, this.reflectance);
+            AssertSpectraEqual(expected, this.reflectance);
+        }
+
         /// <summary>
         /// Confirms the kernel rejects inputs that cannot mean anything, rather than
         /// returning a colour computed from nonsense.
@@ -158,6 +199,14 @@ namespace PaintTranslator.Tests
         private static PigmentCoefficients Paint(string name)
         {
             return PigmentLibrary.All.Single(paint => paint.Name == name);
+        }
+
+        private static void AssertSpectraEqual(double[] expected, double[] actual)
+        {
+            for (int band = 0; band < SpectralBands.Count; band++)
+            {
+                Assert.InRange(actual[band], expected[band] - 1e-12, expected[band] + 1e-12);
+            }
         }
     }
 }

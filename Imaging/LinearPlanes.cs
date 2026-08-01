@@ -96,7 +96,7 @@ namespace PaintTranslator.Imaging
             var table = new float[256];
             for (int code = 0; code < table.Length; code++)
             {
-                table[code] = (float)ColorSpace.SrgbToLinear(code / 255.0);
+                table[code] = (float)ColorSpace.SrgbByteToLinear(code);
             }
 
             return table;

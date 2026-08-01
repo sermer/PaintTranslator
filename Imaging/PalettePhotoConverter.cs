@@ -337,9 +337,9 @@ namespace PaintTranslator.Imaging
         /// <param name="labB">The resulting b* component.</param>
         internal static void RgbToLab(int r, int g, int b, out double labL, out double labA, out double labB)
         {
-            double rl = ColorSpace.SrgbToLinear(r / 255.0);
-            double gl = ColorSpace.SrgbToLinear(g / 255.0);
-            double bl = ColorSpace.SrgbToLinear(b / 255.0);
+            double rl = ColorSpace.SrgbByteToLinear(r);
+            double gl = ColorSpace.SrgbByteToLinear(g);
+            double bl = ColorSpace.SrgbByteToLinear(b);
 
             ColorSpace.LinearRgbToXyz(rl, gl, bl, out double x, out double y, out double z);
             ColorSpace.XyzToLab(x, y, z, out labL, out labA, out labB);

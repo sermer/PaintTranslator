@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using PaintTranslator.Pigments;
 
@@ -36,7 +37,13 @@ namespace PaintTranslator.Imaging
         /// <param name="radius">The blur radius in pixels. Zero or less leaves the
         /// buffer exactly as it was.</param>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="pixels"/> is null.</exception>
-        public static void Apply(int[] pixels, int strideInts, int width, int height, int radius)
+        public static void Apply(
+            int[] pixels,
+            int strideInts,
+            int width,
+            int height,
+            int radius,
+            CancellationToken cancellationToken = default)
         {
             if (pixels == null)
             {
@@ -46,6 +53,8 @@ namespace PaintTranslator.Imaging
             {
                 return;
             }
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             double[] kernel = BuildKernel(radius);
 
@@ -57,9 +66,11 @@ namespace PaintTranslator.Imaging
 
             for (int shift = LinearPlanes.RedShift; shift >= LinearPlanes.BlueShift; shift -= 8)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 LinearPlanes.Decode(pixels, strideInts, width, height, shift, plane);
-                BlurHorizontal(plane, scratch, width, height, kernel, radius);
-                BlurVertical(scratch, plane, width, height, kernel, radius);
+                BlurHorizontal(plane, scratch, width, height, kernel, radius, cancellationToken);
+                BlurVertical(scratch, plane, width, height, kernel, radius, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
                 LinearPlanes.Encode(plane, pixels, strideInts, width, height, shift);
             }
         }
@@ -104,9 +115,19 @@ namespace PaintTranslator.Imaging
         /// <param name="height">The image height in pixels.</param>
         /// <param name="kernel">The normalized kernel weights.</param>
         /// <param name="radius">The blur radius in pixels.</param>
-        private static void BlurHorizontal(float[] source, float[] destination, int width, int height, double[] kernel, int radius)
+        private static void BlurHorizontal(
+            float[] source,
+            float[] destination,
+            int width,
+            int height,
+            double[] kernel,
+            int radius,
+            CancellationToken cancellationToken)
         {
-            Parallel.For(0, height, y =>
+            Parallel.For(0, height, new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+            }, y =>
             {
                 int row = y * width;
                 for (int x = 0; x < width; x++)
@@ -134,14 +155,24 @@ namespace PaintTranslator.Imaging
         /// <param name="height">The image height in pixels.</param>
         /// <param name="kernel">The normalized kernel weights.</param>
         /// <param name="radius">The blur radius in pixels.</param>
-        private static void BlurVertical(float[] source, float[] destination, int width, int height, double[] kernel, int radius)
+        private static void BlurVertical(
+            float[] source,
+            float[] destination,
+            int width,
+            int height,
+            double[] kernel,
+            int radius,
+            CancellationToken cancellationToken)
         {
             // Accumulating a whole output row one source row at a time, rather than
             // gathering each pixel's 2r+1 taps where they sit, is what keeps this pass
             // from costing far more than the horizontal one: every read below is
             // sequential, where a per-pixel gather would stride a row width per tap and
             // miss the cache on every one of them.
-            Parallel.For(0, height, () => new double[width], (y, state, row) =>
+            Parallel.For(0, height, new ParallelOptions
+            {
+                CancellationToken = cancellationToken,
+            }, () => new double[width], (y, state, row) =>
             {
                 Array.Clear(row, 0, width);
 

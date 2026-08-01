@@ -16,6 +16,9 @@ namespace PaintTranslator.Imaging.Styles.Stages
         /// <summary>Gets the empty parameter list: leaving the gamut untouched has nothing to tune.</summary>
         public IReadOnlyList<StyleParameter> Parameters { get; } = Array.Empty<StyleParameter>();
 
+        /// <summary>Gets the empty list: this stage never changes gamut construction.</summary>
+        public IReadOnlyList<StyleParameter> BuildParameters { get; } = Array.Empty<StyleParameter>();
+
         /// <summary>
         /// Does nothing, leaving <paramref name="builder"/> to sample the gamut
         /// exactly as it would with no style applied at all.

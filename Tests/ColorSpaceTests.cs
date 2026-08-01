@@ -104,5 +104,17 @@ namespace PaintTranslator.Tests
 
             Assert.InRange(lightness, 53.3, 53.9);
         }
+
+        [Fact]
+        public void ByteLookupExactlyMatchesTransferFunctionForEveryChannelCode()
+        {
+            for (int encoded = 0; encoded <= 255; encoded++)
+            {
+                long expected = BitConverter.DoubleToInt64Bits(ColorSpace.SrgbToLinear(encoded / 255.0));
+                long actual = BitConverter.DoubleToInt64Bits(ColorSpace.SrgbByteToLinear(encoded));
+
+                Assert.Equal(expected, actual);
+            }
+        }
     }
 }

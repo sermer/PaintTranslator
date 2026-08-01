@@ -14,6 +14,8 @@ namespace PaintTranslator.Pigments
     /// </summary>
     public static class ColorSpace
     {
+        private static readonly double[] LinearFromSrgbByte = BuildLinearFromSrgbByte();
+
         /// <summary>The D65 reference white's X tristimulus value.</summary>
         private const double WhiteX = 0.95047;
 
@@ -33,6 +35,15 @@ namespace PaintTranslator.Pigments
             return encoded <= 0.04045
                 ? encoded / 12.92
                 : Math.Pow((encoded + 0.055) / 1.055, 2.4);
+        }
+
+        /// <summary>
+        /// Decodes an eight-bit sRGB channel without repeating its power operation.
+        /// The values exactly match <see cref="SrgbToLinear(double)"/>.
+        /// </summary>
+        internal static double SrgbByteToLinear(int encoded)
+        {
+            return LinearFromSrgbByte[encoded];
         }
 
         /// <summary>
@@ -170,6 +181,17 @@ namespace PaintTranslator.Pigments
             const double Epsilon = 216.0 / 24389.0;
             const double Kappa = 24389.0 / 27.0;
             return t > Epsilon ? Math.Cbrt(t) : (Kappa * t + 16.0) / 116.0;
+        }
+
+        private static double[] BuildLinearFromSrgbByte()
+        {
+            var table = new double[256];
+            for (int encoded = 0; encoded < table.Length; encoded++)
+            {
+                table[encoded] = SrgbToLinear(encoded / 255.0);
+            }
+
+            return table;
         }
     }
 }

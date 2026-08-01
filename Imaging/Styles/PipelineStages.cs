@@ -82,6 +82,14 @@ namespace PaintTranslator.Imaging.Styles
     internal interface ICandidateTransform : IPipelineStage
     {
         /// <summary>
+        /// Gets the subset of this stage's parameters that changes the mixtures
+        /// <see cref="Transform(MixtureBuilder, ParameterValues)"/> builds. Parameters
+        /// used only by an image-aware second pass are deliberately absent, allowing a
+        /// previously sampled gamut to survive those adjustments.
+        /// </summary>
+        IReadOnlyList<StyleParameter> BuildParameters { get; }
+
+        /// <summary>
         /// Adjusts the mixture list.
         /// </summary>
         /// <param name="builder">The mixtures about to be rendered.</param>

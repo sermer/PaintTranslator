@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace PaintTranslator.Imaging.Styles.Stages
 {
@@ -10,15 +11,25 @@ namespace PaintTranslator.Imaging.Styles.Stages
     /// </summary>
     internal sealed class AbstractPaletteTransform : ICandidateTransform, IImageAwareCandidateTransform
     {
+        private static readonly StyleParameter MotherFractionParameter =
+            new StyleParameter("motherFraction", "Mother colour", 0.0, 0.6, 0.15, "");
+
         private static readonly IReadOnlyList<StyleParameter> ParameterList = new[]
         {
-            new StyleParameter("motherFraction", "Mother colour", 0.0, 0.6, 0.15, ""),
+            MotherFractionParameter,
             new StyleParameter("colourCount", "Palette colours", 3.0, 12.0, 8.0, ""),
         };
 
         public string DisplayName => "Palette";
 
         public IReadOnlyList<StyleParameter> Parameters => ParameterList;
+
+        /// <summary>
+        /// Gets only the mother-colour fraction. Palette colour count is applied to
+        /// the already-built set after inspecting the image and must not invalidate
+        /// the expensive spectral gamut.
+        /// </summary>
+        public IReadOnlyList<StyleParameter> BuildParameters { get; } = new[] { MotherFractionParameter };
 
         public void Transform(MixtureBuilder builder, ParameterValues values)
         {
@@ -40,7 +51,9 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 return candidates;
             }
 
-            var samples = CollectSamples(pixels, strideInts, width, height);
+            context.CancellationToken.ThrowIfCancellationRequested();
+            var samples = CollectSamples(
+                pixels, strideInts, width, height, context.CancellationToken);
             if (samples.Count == 0)
             {
                 return candidates;
@@ -49,6 +62,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
             var centers = InitialiseCenters(samples, requested);
             for (int iteration = 0; iteration < 6; iteration++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 var sumL = new double[requested];
                 var sumA = new double[requested];
                 var sumB = new double[requested];
@@ -56,6 +70,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
                 foreach (Sample sample in samples)
                 {
+                    context.CancellationToken.ThrowIfCancellationRequested();
                     int nearest = NearestCenter(sample, centers);
                     weights[nearest] += sample.Weight;
                     sumL[nearest] += sample.L * sample.Weight;
@@ -85,6 +100,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
             };
             foreach (Sample center in centers)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 selected.Add(candidates.FindNearest(center.L, center.A, center.B));
             }
 
@@ -104,11 +120,17 @@ namespace PaintTranslator.Imaging.Styles.Stages
             return candidates.Select(selected);
         }
 
-        private static List<Sample> CollectSamples(int[] pixels, int strideInts, int width, int height)
+        private static List<Sample> CollectSamples(
+            int[] pixels,
+            int strideInts,
+            int width,
+            int height,
+            CancellationToken cancellationToken)
         {
             var counts = new int[ColorQuantization.CacheSize];
             for (int y = 0; y < height; y++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -119,6 +141,11 @@ namespace PaintTranslator.Imaging.Styles.Stages
             var samples = new List<Sample>();
             for (int key = 0; key < counts.Length; key++)
             {
+                if ((key & 4095) == 0)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+
                 if (counts[key] == 0)
                 {
                     continue;

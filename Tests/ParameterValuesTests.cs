@@ -92,6 +92,19 @@ namespace PaintTranslator.Tests
             Assert.Equal(1.0, second["gain"]);
         }
 
+        [Fact]
+        public void SnapshotDoesNotChangeWhenTheLiveValuesChange()
+        {
+            var live = new ParameterValues(TwoParameters());
+            live.Set("gain", 2.0);
+
+            ParameterValues snapshot = live.Snapshot();
+            live.Set("gain", 3.0);
+
+            Assert.Equal(2.0, snapshot["gain"]);
+            Assert.Equal(3.0, live["gain"]);
+        }
+
         /// <summary>
         /// A style registry hand-writes <see cref="StyleParameter"/> declarations, and
         /// nothing stops one from naming a default outside its own declared range — a

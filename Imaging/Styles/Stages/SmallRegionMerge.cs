@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace PaintTranslator.Imaging.Styles.Stages
 {
@@ -42,18 +43,24 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 width,
                 height,
                 valuesByRegion,
-                areas);
+                areas,
+                context.CancellationToken);
 
             int regionCount = valuesByRegion.Count;
             var parent = new int[regionCount];
             var neighbours = new List<HashSet<int>>(regionCount);
             for (int i = 0; i < regionCount; i++)
             {
+                if ((i & 4095) == 0)
+                {
+                    context.CancellationToken.ThrowIfCancellationRequested();
+                }
+
                 parent[i] = i;
                 neighbours.Add(new HashSet<int>());
             }
 
-            BuildAdjacency(labels, strideInts, width, height, neighbours);
+            BuildAdjacency(labels, strideInts, width, height, neighbours, context.CancellationToken);
 
             var pending = new SortedSet<(int Area, int Region)>();
             for (int i = 0; i < regionCount; i++)
@@ -66,6 +73,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             while (pending.Count > 0)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 (int _, int candidate) = pending.Min;
                 pending.Remove(pending.Min);
                 int source = Find(parent, candidate);
@@ -91,6 +99,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             for (int y = 0; y < height; y++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -107,10 +116,12 @@ namespace PaintTranslator.Imaging.Styles.Stages
             int width,
             int height,
             List<int> values,
-            List<int> areas)
+            List<int> areas,
+            CancellationToken cancellationToken)
         {
             for (int y = 0; y < height; y++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 for (int x = 0; x < width; x++)
                 {
                     int at = y * strideInts + x;
@@ -128,6 +139,11 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
                     while (queue.Count > 0)
                     {
+                        if ((area & 4095) == 0)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+
                         (int currentX, int currentY) = queue.Dequeue();
                         area++;
                         TryEnqueue(currentX - 1, currentY, value, region, indices, labels, strideInts, width, height, queue);
@@ -147,10 +163,12 @@ namespace PaintTranslator.Imaging.Styles.Stages
             int strideInts,
             int width,
             int height,
-            IReadOnlyList<HashSet<int>> neighbours)
+            IReadOnlyList<HashSet<int>> neighbours,
+            CancellationToken cancellationToken)
         {
             for (int y = 0; y < height; y++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {

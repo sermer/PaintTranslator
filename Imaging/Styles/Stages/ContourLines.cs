@@ -34,6 +34,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             for (int y = 0; y < height; y++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -48,6 +49,7 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             for (int y = 0; y < height; y++)
             {
+                context.CancellationToken.ThrowIfCancellationRequested();
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {

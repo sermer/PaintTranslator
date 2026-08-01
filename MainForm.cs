@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using PaintTranslator.Data;
@@ -38,6 +39,9 @@ namespace PaintTranslator
         /// pixels, even after a previous conversion has replaced the display.
         /// </summary>
         private Bitmap sourcePhoto;
+
+        /// <summary>Guards cloning and replacement of the full-resolution source.</summary>
+        private readonly object sourcePhotoSync = new object();
 
         /// <summary>
         /// The file name of the loaded photo, used to rebuild the window title
@@ -88,6 +92,33 @@ namespace PaintTranslator
         /// the bitmap the first is still working from.
         /// </summary>
         private bool imageOperationInProgress;
+
+        /// <summary>
+        /// A source downsampled before conversion. Interactive frames use this bitmap;
+        /// the Convert button continues to render <see cref="sourcePhoto"/> itself.
+        /// </summary>
+        private Bitmap previewPhoto;
+
+        /// <summary>Debounces rapid slider ticks before starting a preview frame.</summary>
+        private readonly System.Windows.Forms.Timer previewTimer;
+
+        /// <summary>Serializes preview and full renders so CPU-heavy frames never compete.</summary>
+        private readonly SemaphoreSlim renderGate = new SemaphoreSlim(1, 1);
+
+        /// <summary>Reuses palette-dependent spectral candidates between frames.</summary>
+        private readonly CandidateSetCache candidateSetCache = new CandidateSetCache();
+
+        /// <summary>Reuses exact RGB mapping answers while mapping state is unchanged.</summary>
+        private readonly ColourMapCache colourMapCache = new ColourMapCache();
+
+        private bool previewRenderInProgress;
+        private bool previewRenderPending;
+        private bool suppressPreviewScheduling;
+        private long previewGeneration;
+        private CancellationTokenSource automaticRenderCancellation;
+        private bool automaticFullRenderInProgress;
+
+        private const int PreviewDebounceMilliseconds = 125;
 
         /// <summary>
         /// Each style's live parameter values, kept per stage instance and per style so
@@ -149,6 +180,11 @@ namespace PaintTranslator
         {
             InitializeComponent();
             stylePanel.Resize += StylePanel_Resize;
+            previewTimer = new System.Windows.Forms.Timer
+            {
+                Interval = PreviewDebounceMilliseconds,
+            };
+            previewTimer.Tick += PreviewTimer_Tick;
 
             // Item objects carry their swatch color, so they can't be expressed as
             // Designer literals; populate the list in code from the saved palette.
@@ -176,8 +212,8 @@ namespace PaintTranslator
         /// <param name="style">The style to fetch or seed values for.</param>
         /// <returns>The style's live values, keyed by stage instance. The same
         /// dictionary instance is returned on every call for a given style until the
-        /// reset button replaces it, so a caller may hold onto it across an
-        /// <c>await</c> without it going stale underneath them.</returns>
+        /// reset button replaces it. Workers must receive
+        /// <see cref="StylePipeline.SnapshotValues"/> rather than this live store.</returns>
         private Dictionary<IPipelineStage, ParameterValues> GetOrCreateStyleValues(StyleDefinition style)
         {
             if (!styleValues.TryGetValue(style.Name, out Dictionary<IPipelineStage, ParameterValues> values))
@@ -187,6 +223,284 @@ namespace PaintTranslator
             }
 
             return values;
+        }
+
+        /// <summary>
+        /// Captures every input a worker needs without retaining mutable controls or
+        /// live parameter stores. Preview requests own their small source immediately;
+        /// automatic full requests defer that copy to the worker under the same lock
+        /// image replacement uses, so capturing a large image never stalls the UI.
+        /// </summary>
+        private ConversionRenderRequest CaptureRenderRequest(bool preview, bool copySource = false)
+        {
+            Bitmap source = preview ? previewPhoto : sourcePhoto;
+            if (source == null)
+            {
+                return null;
+            }
+
+            List<PigmentCoefficients> paints = GetSelectedPaints(null);
+            if (paints.Count == 0)
+            {
+                return null;
+            }
+
+            StyleDefinition style = StyleRegistry.ByName((string)styleComboBox.SelectedItem);
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values =
+                StylePipeline.SnapshotValues(style, GetOrCreateStyleValues(style));
+
+            int blurRadius = blurTrackBar.Value;
+            int markPixels = markTrackBar.Value;
+            Bitmap requestSource = source;
+            bool ownsSource = false;
+            if (preview)
+            {
+                requestSource = new Bitmap(source);
+                ownsSource = true;
+            }
+
+            if (preview)
+            {
+                blurRadius = ConversionPreview.ScaleRadius(blurRadius, sourcePhoto.Size, requestSource.Size);
+                markPixels = ConversionPreview.ScaleRadius(markPixels, sourcePhoto.Size, requestSource.Size);
+            }
+
+            (StyleDefinition renderStyle, IReadOnlyDictionary<IPipelineStage, ParameterValues> renderValues) =
+                PalettePhotoConverter.ComposeWithBlur(style, values, blurRadius);
+
+            return new ConversionRenderRequest(
+                requestSource, ownsSource, copySource, paints, renderStyle,
+                markPixels, renderValues, previewGeneration);
+        }
+
+        /// <summary>Renders one immutable request, reusing its palette's candidate set.</summary>
+        private Bitmap RenderCapturedRequest(
+            ConversionRenderRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            Bitmap workerSource = null;
+            try
+            {
+                Bitmap renderSource = request.Source;
+                if (request.CloneSourceOnWorker)
+                {
+                    lock (sourcePhotoSync)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        workerSource = new Bitmap(request.Source);
+                    }
+
+                    renderSource = workerSource;
+                }
+
+                CandidateSet candidates = candidateSetCache.GetOrCreate(
+                    request.Paints, request.Style, request.Values, cancellationToken);
+                return StylePipeline.Render(
+                    renderSource, request.Paints, request.Style, request.MarkPixels,
+                    request.Values, candidates, cancellationToken,
+                    colourMapCache: colourMapCache);
+            }
+            finally
+            {
+                workerSource?.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Restarts the short quiet-period timer. No worker is started here, so dragging
+        /// across many ticks produces one request carrying the final position.
+        /// </summary>
+        private void SchedulePreview()
+        {
+            if (suppressPreviewScheduling || sourcePhoto == null || previewPhoto == null ||
+                wheelDisplayed || imageOperationInProgress || IsDisposed || Disposing)
+            {
+                return;
+            }
+
+            previewGeneration++;
+            automaticRenderCancellation?.Cancel();
+            previewRenderPending = false;
+            previewTimer.Stop();
+            previewTimer.Start();
+        }
+
+        /// <summary>Invalidates queued work and cooperatively stops the active automatic render.</summary>
+        private void CancelPreview()
+        {
+            previewGeneration++;
+            automaticRenderCancellation?.Cancel();
+            previewRenderPending = false;
+            previewTimer.Stop();
+        }
+
+        /// <summary>
+        /// Runs a small preview first, then automatically renders and swaps in the full
+        /// source. A newer control state cancels either phase, and the debounce timer
+        /// leaves only the newest request pending, so workers never pile up.
+        /// </summary>
+        private async void PreviewTimer_Tick(object sender, EventArgs e)
+        {
+            previewTimer.Stop();
+            previewRenderPending = true;
+            if (previewRenderInProgress)
+            {
+                return;
+            }
+
+            previewRenderInProgress = true;
+            try
+            {
+                while (previewRenderPending && !imageOperationInProgress && !IsDisposed && !Disposing)
+                {
+                    previewRenderPending = false;
+                    using var cancellation = new CancellationTokenSource();
+                    automaticRenderCancellation = cancellation;
+
+                    try
+                    {
+                        using ConversionRenderRequest previewRequest = CaptureRenderRequest(preview: true);
+                        if (previewRequest == null)
+                        {
+                            return;
+                        }
+
+                        Bitmap previewResult = await RenderCapturedRequestAsync(
+                            previewRequest, cancellation.Token);
+                        if (!CanDisplayAutomaticResult(previewRequest, cancellation.Token))
+                        {
+                            previewResult.Dispose();
+                            continue;
+                        }
+
+                        SetDisplayedImage(previewResult);
+                        wheelDisplayed = false;
+                        Text = $"Paint Translator - {sourcePhotoName} (live preview)";
+
+                        // Ask the worker to own the full-resolution copy. Source replacement
+                        // shares its short lock, so the UI never performs the expensive clone
+                        // and neither operation can dispose/read the bitmap beneath the other.
+                        using ConversionRenderRequest fullRequest = CaptureRenderRequest(
+                            preview: false, copySource: true);
+                        if (fullRequest == null)
+                        {
+                            continue;
+                        }
+
+                        SetAutomaticFullRenderInProgress(true);
+                        try
+                        {
+                            Bitmap fullResult = await RenderCapturedRequestAsync(
+                                fullRequest, cancellation.Token);
+                            if (CanDisplayAutomaticResult(fullRequest, cancellation.Token))
+                            {
+                                SetDisplayedImage(fullResult);
+                                wheelDisplayed = false;
+                                Text = $"Paint Translator - {sourcePhotoName} (converted to paints)";
+                            }
+                            else
+                            {
+                                fullResult.Dispose();
+                            }
+                        }
+                        finally
+                        {
+                            SetAutomaticFullRenderInProgress(false);
+                        }
+                    }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+                    {
+                        // A newer UI state owns the next frame. Cancellation is an
+                        // expected control-flow path, not a conversion failure.
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"Automatic render failed: {ex}");
+                    }
+                    finally
+                    {
+                        if (ReferenceEquals(automaticRenderCancellation, cancellation))
+                        {
+                            automaticRenderCancellation = null;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                previewRenderInProgress = false;
+            }
+        }
+
+        /// <summary>Waits for the shared render slot and runs one captured frame off the UI thread.</summary>
+        private async Task<Bitmap> RenderCapturedRequestAsync(
+            ConversionRenderRequest request,
+            CancellationToken cancellationToken)
+        {
+            await renderGate.WaitAsync(cancellationToken);
+            try
+            {
+                return await Task.Run(
+                    () => RenderCapturedRequest(request, cancellationToken), cancellationToken);
+            }
+            finally
+            {
+                renderGate.Release();
+            }
+        }
+
+        /// <summary>Returns whether a completed automatic frame still describes the current controls.</summary>
+        private bool CanDisplayAutomaticResult(
+            ConversionRenderRequest request,
+            CancellationToken cancellationToken)
+        {
+            return !cancellationToken.IsCancellationRequested &&
+                request.Generation == previewGeneration &&
+                !imageOperationInProgress &&
+                !wheelDisplayed &&
+                !IsDisposed &&
+                !Disposing;
+        }
+
+        private sealed class ConversionRenderRequest : IDisposable
+        {
+            private readonly bool ownsSource;
+
+            public ConversionRenderRequest(
+                Bitmap source,
+                bool ownsSource,
+                bool cloneSourceOnWorker,
+                IReadOnlyList<PigmentCoefficients> paints,
+                StyleDefinition style,
+                int markPixels,
+                IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
+                long generation)
+            {
+                Source = source;
+                this.ownsSource = ownsSource;
+                CloneSourceOnWorker = cloneSourceOnWorker;
+                Paints = paints;
+                Style = style;
+                MarkPixels = markPixels;
+                Values = values;
+                Generation = generation;
+            }
+
+            public Bitmap Source { get; }
+            public bool CloneSourceOnWorker { get; }
+            public IReadOnlyList<PigmentCoefficients> Paints { get; }
+            public StyleDefinition Style { get; }
+            public int MarkPixels { get; }
+            public IReadOnlyDictionary<IPipelineStage, ParameterValues> Values { get; }
+            public long Generation { get; }
+
+            public void Dispose()
+            {
+                if (ownsSource)
+                {
+                    Source.Dispose();
+                }
+            }
         }
 
         /// <summary>
@@ -372,9 +686,9 @@ namespace PaintTranslator
         /// <see cref="Control.Tag"/>, which is what lets one handler serve all of
         /// them rather than a closure captured per slider.
         /// <para>
-        /// Deliberately does not re-convert: a moved slider is a preview of a choice
-        /// the user has not committed to yet, and re-running the (potentially slow)
-        /// conversion on every tick would make dragging a slider feel like it hangs.
+        /// Schedules a debounced preview rather than rendering synchronously inside
+        /// the event. Rapid ticks collapse into one immutable request after the slider
+        /// has been quiet briefly, so dragging never blocks the UI thread.
         /// </para>
         /// </summary>
         /// <param name="sender">The slider that moved.</param>
@@ -388,6 +702,7 @@ namespace PaintTranslator
             double value = TrackBarPositionToParameterValue(parameter, trackBar.Value);
             values.Set(parameter.Id, value);
             caption.Text = FormatParameterCaption(parameter, value);
+            SchedulePreview();
         }
 
         /// <summary>
@@ -401,6 +716,7 @@ namespace PaintTranslator
         {
             StyleDefinition style = StyleRegistry.ByName((string)styleComboBox.SelectedItem);
             BuildStylePanel(style);
+            SchedulePreview();
         }
 
         /// <summary>
@@ -429,6 +745,7 @@ namespace PaintTranslator
             StyleDefinition style = StyleRegistry.ByName((string)styleComboBox.SelectedItem);
             styleValues[style.Name] = new Dictionary<IPipelineStage, ParameterValues>(StylePipeline.DefaultValues(style));
             BuildStylePanel(style);
+            SchedulePreview();
         }
 
         /// <summary>
@@ -524,6 +841,10 @@ namespace PaintTranslator
                 if (wheelDisplayed)
                 {
                     SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
+                }
+                else
+                {
+                    SchedulePreview();
                 }
             }
         }
@@ -656,6 +977,8 @@ namespace PaintTranslator
                 return;
             }
 
+            CancelPreview();
+            bool adopted = false;
             SetImageOperationInProgress(true);
             try
             {
@@ -669,6 +992,7 @@ namespace PaintTranslator
                 }
 
                 AdoptSourcePhoto(loaded.Image, loaded.Name);
+                adopted = true;
             }
             catch (Exception ex)
             {
@@ -678,6 +1002,10 @@ namespace PaintTranslator
             finally
             {
                 SetImageOperationInProgress(false);
+                if (adopted)
+                {
+                    SchedulePreview();
+                }
             }
         }
 
@@ -689,25 +1017,42 @@ namespace PaintTranslator
         /// <param name="name">The name to show in the window title.</param>
         private void AdoptSourcePhoto(Bitmap photo, string name)
         {
+            CancelPreview();
+
             // Keep the original separate from the displayed copy: the display gets
             // disposed on every image swap, while the original must survive as the
             // source for conversions.
-            sourcePhoto?.Dispose();
-            sourcePhoto = photo;
+            lock (sourcePhotoSync)
+            {
+                sourcePhoto?.Dispose();
+                sourcePhoto = photo;
+            }
+
+            previewPhoto?.Dispose();
+            previewPhoto = ConversionPreview.CreateSource(photo);
             sourcePhotoName = name;
 
             // A brush covers a roughly constant fraction of a canvas whatever
             // resolution the file happens to be, so the default follows the image
             // rather than persisting from the last one. A deliberate adjustment
             // survives until the next load, which is when it stops being meaningful.
-            markTrackBar.Value = Math.Clamp(
-                RenderContext.DefaultMarkPixels(photo.Width, photo.Height),
-                markTrackBar.Minimum,
-                markTrackBar.Maximum);
+            suppressPreviewScheduling = true;
+            try
+            {
+                markTrackBar.Value = Math.Clamp(
+                    RenderContext.DefaultMarkPixels(photo.Width, photo.Height),
+                    markTrackBar.Minimum,
+                    markTrackBar.Maximum);
+            }
+            finally
+            {
+                suppressPreviewScheduling = false;
+            }
 
             SetDisplayedImage(new Bitmap(sourcePhoto));
             wheelDisplayed = false;
             Text = $"Paint Translator - {sourcePhotoName}";
+            SchedulePreview();
         }
 
         /// <summary>
@@ -721,8 +1066,27 @@ namespace PaintTranslator
             imageOperationInProgress = inProgress;
             loadImageButton.Enabled = !inProgress;
             generateWheelButton.Enabled = !inProgress;
-            convertPhotoButton.Enabled = !inProgress;
-            UseWaitCursor = inProgress;
+            palettePanel.Enabled = !inProgress;
+            UpdateWaitCursor();
+        }
+
+        /// <summary>
+        /// Shows a wait cursor while the automatic full-resolution replacement is
+        /// rendering without disabling the controls that can cancel and supersede it.
+        /// </summary>
+        private void SetAutomaticFullRenderInProgress(bool inProgress)
+        {
+            automaticFullRenderInProgress = inProgress;
+            UpdateWaitCursor();
+        }
+
+        /// <summary>Keeps overlapping automatic and explicit operations from clearing each other's cursor.</summary>
+        private void UpdateWaitCursor()
+        {
+            if (!IsDisposed && !Disposing)
+            {
+                UseWaitCursor = imageOperationInProgress || automaticFullRenderInProgress;
+            }
         }
 
         /// <summary>
@@ -749,6 +1113,7 @@ namespace PaintTranslator
         /// <param name="e">The event arguments.</param>
         private void GenerateWheelButton_Click(object sender, EventArgs e)
         {
+            CancelPreview();
             SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
             wheelDisplayed = true;
             Text = "Paint Translator - Color Wheel (generated)";
@@ -770,8 +1135,9 @@ namespace PaintTranslator
                 return;
             }
 
-            List<PigmentCoefficients> selected = GetSelectedPaints(null);
-            if (selected.Count == 0)
+            CancelPreview();
+            using ConversionRenderRequest request = CaptureRenderRequest(preview: false);
+            if (request == null)
             {
                 MessageBox.Show(this, "Select at least one paint to convert with.",
                     "No paints selected", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -784,29 +1150,16 @@ namespace PaintTranslator
             SetImageOperationInProgress(true);
             try
             {
-                // All of these are read on the UI thread; the conversion runs on a
-                // worker where touching controls is not allowed. The style's values
-                // dictionary in particular must be read here rather than inside the
-                // worker delegate, since GetOrCreateStyleValues can create and store
-                // a new dictionary the first time a style is seen, which is exactly
-                // the kind of control-adjacent state that belongs on this thread.
-                int blurRadius = blurTrackBar.Value;
-                int markPixels = markTrackBar.Value;
-                StyleDefinition style = StyleRegistry.ByName((string)styleComboBox.SelectedItem);
-                Dictionary<IPipelineStage, ParameterValues> values = GetOrCreateStyleValues(style);
-
-                // blurRadius predates the style pipeline and has no slot of its own
-                // in a StyleDefinition, so it is composed onto the style and this
-                // style's own live values by the same helper PalettePhotoConverter
-                // uses for its own blurRadius parameter. Composing onto a copy, not
-                // styleValues[style.Name] itself, is what keeps a blur-stage entry
-                // from accumulating in the dictionary this form reuses across every
-                // future conversion and style switch.
-                (StyleDefinition renderStyle, IReadOnlyDictionary<IPipelineStage, ParameterValues> renderValues) =
-                    PalettePhotoConverter.ComposeWithBlur(style, values, blurRadius);
-
-                Bitmap converted = await Task.Run(
-                    () => StylePipeline.Render(sourcePhoto, selected, renderStyle, markPixels, renderValues));
+                Bitmap converted;
+                await renderGate.WaitAsync();
+                try
+                {
+                    converted = await Task.Run(() => RenderCapturedRequest(request));
+                }
+                finally
+                {
+                    renderGate.Release();
+                }
 
                 SetDisplayedImage(converted);
                 wheelDisplayed = false;
@@ -836,6 +1189,7 @@ namespace PaintTranslator
             // "0 px" would read as a setting rather than as the blur being absent,
             // which is what a zero radius actually means.
             blurLabel.Text = radius == 0 ? "Blur: off" : $"Blur: {radius} px";
+            SchedulePreview();
         }
 
         /// <summary>
@@ -847,6 +1201,7 @@ namespace PaintTranslator
         private void MarkTrackBar_ValueChanged(object sender, EventArgs e)
         {
             markLabel.Text = $"Brush mark: {markTrackBar.Value} px";
+            SchedulePreview();
         }
 
         /// <summary>
@@ -882,10 +1237,11 @@ namespace PaintTranslator
                 suppressPaintCheckEvents = false;
             }
 
-            // Only refresh when the wheel is showing; a loaded photo is unaffected
-            // by paint selection, and the next generated wheel reads the list anyway.
+            // A wheel is regenerated immediately. A loaded photo instead schedules a
+            // debounced conversion preview with the newly committed selection.
             if (!wheelDisplayed)
             {
+                SchedulePreview();
                 return;
             }
 
@@ -928,6 +1284,10 @@ namespace PaintTranslator
             if (wheelDisplayed)
             {
                 SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
+            }
+            else
+            {
+                SchedulePreview();
             }
         }
 
@@ -1408,6 +1768,34 @@ namespace PaintTranslator
                     new Point(box.X + TooltipPadding, textY), Color.White, TextFormatFlags.NoPadding);
                 textY += Font.Height;
             }
+        }
+
+        /// <summary>Releases bitmaps and GDI objects owned outside the component container.</summary>
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            CancelPreview();
+            previewTimer.Dispose();
+            previewPhoto?.Dispose();
+            previewPhoto = null;
+
+            // A full render reads sourcePhoto directly and the process is already
+            // exiting this window; do not dispose it out from under that worker.
+            if (!imageOperationInProgress)
+            {
+                lock (sourcePhotoSync)
+                {
+                    sourcePhoto?.Dispose();
+                    sourcePhoto = null;
+                }
+            }
+
+            stageHeadingFont?.Dispose();
+            stageHeadingFont = null;
+
+            Image displayed = imageCanvas.Image;
+            imageCanvas.Image = null;
+            displayed?.Dispose();
+            base.OnFormClosed(e);
         }
 
         /// <summary>
