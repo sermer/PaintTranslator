@@ -19,12 +19,19 @@ namespace PaintTranslator
     /// </summary>
     public partial class MainForm : Form
     {
-        /// <summary>
-        /// Tracks whether the picture box is currently showing a generated color
-        /// wheel (as opposed to a loaded image), so paint selection changes know
-        /// whether the wheel needs regenerating.
-        /// </summary>
-        private bool wheelDisplayed;
+        /// <summary>Identifies which kind of generated wheel is currently displayed.</summary>
+        private ColorWheelDisplay displayedWheel;
+
+        private readonly ContextMenuStrip colorWheelMenu;
+
+        private bool IsWheelDisplayed => displayedWheel != ColorWheelDisplay.None;
+
+        private enum ColorWheelDisplay
+        {
+            None,
+            Traditional,
+            SelectedPaints,
+        }
 
         /// <summary>
         /// Suppresses the paint check handlers while the select-all checkbox and the
@@ -174,6 +181,11 @@ namespace PaintTranslator
         public MainForm()
         {
             InitializeComponent();
+            colorWheelMenu = new ContextMenuStrip();
+            colorWheelMenu.Items.Add(
+                "Traditional Artist Wheel", null, TraditionalColorWheelMenuItem_Click);
+            colorWheelMenu.Items.Add(
+                "Selected Golden Paints", null, SelectedPaintColorWheelMenuItem_Click);
             stylePanel.Resize += StylePanel_Resize;
             previewTimer = new System.Windows.Forms.Timer
             {
@@ -280,7 +292,7 @@ namespace PaintTranslator
         private void SchedulePreview()
         {
             if (suppressPreviewScheduling || sourceFrame == null || previewFrame == null ||
-                wheelDisplayed || imageOperationInProgress || IsDisposed || Disposing)
+                IsWheelDisplayed || imageOperationInProgress || IsDisposed || Disposing)
             {
                 return;
             }
@@ -346,7 +358,7 @@ namespace PaintTranslator
                         }
 
                         SetDisplayedImage(previewResult);
-                        wheelDisplayed = false;
+                        displayedWheel = ColorWheelDisplay.None;
                         Text = $"Paint Translator - {sourcePhotoName} (live preview)";
 
                         // The immutable full frame can be shared directly with the worker;
@@ -371,7 +383,7 @@ namespace PaintTranslator
                             if (CanDisplayAutomaticResult(fullRequest, cancellation.Token))
                             {
                                 SetDisplayedImage(fullResult);
-                                wheelDisplayed = false;
+                                displayedWheel = ColorWheelDisplay.None;
                                 Text = $"Paint Translator - {sourcePhotoName} (converted to paints)";
                             }
                             else
@@ -433,7 +445,7 @@ namespace PaintTranslator
             return !cancellationToken.IsCancellationRequested &&
                 request.Generation == previewGeneration &&
                 !imageOperationInProgress &&
-                !wheelDisplayed &&
+                !IsWheelDisplayed &&
                 !IsDisposed &&
                 !Disposing;
         }
@@ -797,13 +809,13 @@ namespace PaintTranslator
 
                 PopulatePaintList(new HashSet<string>(chosen, StringComparer.Ordinal));
 
-                // A displayed wheel reflects the old palette; regenerate it from
-                // the rebuilt list.
-                if (wheelDisplayed)
+                // Only the measured-paint wheel depends on this palette. A
+                // traditional wheel remains unchanged when paint selection changes.
+                if (displayedWheel == ColorWheelDisplay.SelectedPaints)
                 {
                     SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
                 }
-                else
+                else if (!IsWheelDisplayed)
                 {
                     SchedulePreview();
                 }
@@ -1021,7 +1033,7 @@ namespace PaintTranslator
             }
 
             SetDisplayedImage(sourceFrame.CreateBitmap());
-            wheelDisplayed = false;
+            displayedWheel = ColorWheelDisplay.None;
             Text = $"Paint Translator - {sourcePhotoName}";
             SchedulePreview();
         }
@@ -1077,17 +1089,36 @@ namespace PaintTranslator
             return $"All supported images ({joined})|{joined}|All files (*.*)|*.*";
         }
 
-        /// <summary>
-        /// Generates a color wheel from the currently checked paints and displays it.
-        /// </summary>
-        /// <param name="sender">The button that raised the event.</param>
-        /// <param name="e">The event arguments.</param>
+        /// <summary>Opens the menu of available colour-wheel types.</summary>
         private void GenerateWheelButton_Click(object sender, EventArgs e)
         {
+            colorWheelMenu.Show(generateWheelButton, new Point(0, generateWheelButton.Height));
+        }
+
+        /// <summary>Displays the palette-independent traditional artist wheel.</summary>
+        private void TraditionalColorWheelMenuItem_Click(object sender, EventArgs e)
+        {
+            DisplayColorWheel(
+                ColorWheelGenerator.CreateTraditional(512),
+                ColorWheelDisplay.Traditional,
+                "Traditional Color Wheel");
+        }
+
+        /// <summary>Displays the measured wheel mixed from the checked Golden paints.</summary>
+        private void SelectedPaintColorWheelMenuItem_Click(object sender, EventArgs e)
+        {
+            DisplayColorWheel(
+                ColorWheelGenerator.Create(512, GetSelectedPaints(null)),
+                ColorWheelDisplay.SelectedPaints,
+                "Selected Golden Paint Wheel");
+        }
+
+        private void DisplayColorWheel(Bitmap wheel, ColorWheelDisplay mode, string title)
+        {
             CancelPreview();
-            SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
-            wheelDisplayed = true;
-            Text = "Paint Translator - Color Wheel (generated)";
+            SetDisplayedImage(wheel);
+            displayedWheel = mode;
+            Text = $"Paint Translator - {title}";
         }
 
         /// <summary>
@@ -1132,7 +1163,7 @@ namespace PaintTranslator
                 }
 
                 SetDisplayedImage(converted);
-                wheelDisplayed = false;
+                displayedWheel = ColorWheelDisplay.None;
                 Text = $"Paint Translator - {sourcePhotoName} (converted to paints)";
             }
             catch (Exception ex)
@@ -1207,15 +1238,16 @@ namespace PaintTranslator
                 suppressPaintCheckEvents = false;
             }
 
-            // A wheel is regenerated immediately. A loaded photo instead schedules a
-            // debounced conversion preview with the newly committed selection.
-            if (!wheelDisplayed)
+            // Only the selected-paint wheel changes with this list. The
+            // traditional wheel is palette-independent and stays on screen.
+            if (displayedWheel == ColorWheelDisplay.SelectedPaints)
+            {
+                SetDisplayedImage(ColorWheelGenerator.Create(512, selected));
+            }
+            else if (!IsWheelDisplayed)
             {
                 SchedulePreview();
-                return;
             }
-
-            SetDisplayedImage(ColorWheelGenerator.Create(512, selected));
         }
 
         /// <summary>
@@ -1249,13 +1281,13 @@ namespace PaintTranslator
                 suppressPaintCheckEvents = false;
             }
 
-            // One regeneration for the whole bulk change; the item states are
-            // already committed here, so no pending change needs merging in.
-            if (wheelDisplayed)
+            // One regeneration for the measured-paint wheel. The traditional
+            // wheel does not depend on the checked paints.
+            if (displayedWheel == ColorWheelDisplay.SelectedPaints)
             {
                 SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
             }
-            else
+            else if (!IsWheelDisplayed)
             {
                 SchedulePreview();
             }
@@ -1437,9 +1469,19 @@ namespace PaintTranslator
                 return;
             }
 
-            string[] lines = wheelDisplayed
-                ? BuildWheelBlendLines(pixel, pixelPoint.X, pixelPoint.Y, bitmap.Width)
-                : BuildClosestMixLines(pixel);
+            string[] lines;
+            if (displayedWheel == ColorWheelDisplay.SelectedPaints)
+            {
+                lines = BuildWheelBlendLines(pixel, pixelPoint.X, pixelPoint.Y, bitmap.Width);
+            }
+            else if (displayedWheel == ColorWheelDisplay.Traditional)
+            {
+                lines = new[] { FormatRgbLine(pixel) };
+            }
+            else
+            {
+                lines = BuildClosestMixLines(pixel);
+            }
             if (lines == null)
             {
                 HideBlendTooltip();
@@ -1746,6 +1788,7 @@ namespace PaintTranslator
             CancelPreview();
             previewTimer.Dispose();
             previewFrame = null;
+            colorWheelMenu.Dispose();
             sourceFrame = null;
 
             stageHeadingFont?.Dispose();

@@ -91,7 +91,7 @@ namespace PaintTranslator
             this.generateWheelButton.Name = "generateWheelButton";
             this.generateWheelButton.Size = new System.Drawing.Size(160, 30);
             this.generateWheelButton.TabIndex = 2;
-            this.generateWheelButton.Text = "Generate Color Wheel";
+            this.generateWheelButton.Text = "Color Wheel...";
             this.generateWheelButton.UseVisualStyleBackColor = true;
             this.generateWheelButton.Click += new System.EventHandler(this.GenerateWheelButton_Click);
             //
