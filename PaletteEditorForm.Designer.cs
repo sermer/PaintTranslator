@@ -42,7 +42,7 @@ namespace PaintTranslator
             this.selectAllCheckBox.Location = new System.Drawing.Point(0, 0);
             this.selectAllCheckBox.Name = "selectAllCheckBox";
             this.selectAllCheckBox.Padding = new System.Windows.Forms.Padding(6, 2, 0, 0);
-            this.selectAllCheckBox.Size = new System.Drawing.Size(340, 24);
+            this.selectAllCheckBox.Size = new System.Drawing.Size(388, 32);
             this.selectAllCheckBox.TabIndex = 0;
             this.selectAllCheckBox.Text = "Select all";
             this.selectAllCheckBox.UseVisualStyleBackColor = true;
@@ -55,7 +55,7 @@ namespace PaintTranslator
             this.allPaintsCheckedListBox.IntegralHeight = false;
             this.allPaintsCheckedListBox.Location = new System.Drawing.Point(0, 24);
             this.allPaintsCheckedListBox.Name = "allPaintsCheckedListBox";
-            this.allPaintsCheckedListBox.Size = new System.Drawing.Size(340, 450);
+            this.allPaintsCheckedListBox.Size = new System.Drawing.Size(388, 518);
             this.allPaintsCheckedListBox.TabIndex = 1;
             this.allPaintsCheckedListBox.ItemCheck += new System.Windows.Forms.ItemCheckEventHandler(this.AllPaintsCheckedListBox_ItemCheck);
             //
@@ -66,15 +66,15 @@ namespace PaintTranslator
             this.buttonPanel.Dock = System.Windows.Forms.DockStyle.Bottom;
             this.buttonPanel.Location = new System.Drawing.Point(0, 474);
             this.buttonPanel.Name = "buttonPanel";
-            this.buttonPanel.Size = new System.Drawing.Size(340, 46);
+            this.buttonPanel.Size = new System.Drawing.Size(388, 54);
             this.buttonPanel.TabIndex = 2;
             //
             // okButton
             //
             this.okButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
-            this.okButton.Location = new System.Drawing.Point(166, 8);
+            this.okButton.Location = new System.Drawing.Point(180, 9);
             this.okButton.Name = "okButton";
-            this.okButton.Size = new System.Drawing.Size(80, 30);
+            this.okButton.Size = new System.Drawing.Size(96, 36);
             this.okButton.TabIndex = 3;
             this.okButton.Text = "OK";
             this.okButton.UseVisualStyleBackColor = true;
@@ -84,9 +84,9 @@ namespace PaintTranslator
             //
             this.cancelButton.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.cancelButton.DialogResult = System.Windows.Forms.DialogResult.Cancel;
-            this.cancelButton.Location = new System.Drawing.Point(252, 8);
+            this.cancelButton.Location = new System.Drawing.Point(284, 9);
             this.cancelButton.Name = "cancelButton";
-            this.cancelButton.Size = new System.Drawing.Size(80, 30);
+            this.cancelButton.Size = new System.Drawing.Size(96, 36);
             this.cancelButton.TabIndex = 4;
             this.cancelButton.Text = "Cancel";
             this.cancelButton.UseVisualStyleBackColor = true;
@@ -97,17 +97,18 @@ namespace PaintTranslator
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.CancelButton = this.cancelButton;
-            this.ClientSize = new System.Drawing.Size(340, 520);
+            this.ClientSize = new System.Drawing.Size(420, 620);
+            this.Padding = new System.Windows.Forms.Padding(16);
             this.Controls.Add(this.allPaintsCheckedListBox);
             this.Controls.Add(this.selectAllCheckBox);
             this.Controls.Add(this.buttonPanel);
             this.MinimizeBox = false;
             this.MaximizeBox = false;
-            this.MinimumSize = new System.Drawing.Size(280, 360);
+            this.MinimumSize = new System.Drawing.Size(360, 460);
             this.Name = "PaletteEditorForm";
             this.ShowInTaskbar = false;
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterParent;
-            this.Text = "Edit My Palette";
+            this.Text = "Golden Paint Palette";
             this.buttonPanel.ResumeLayout(false);
             this.ResumeLayout(false);
         }

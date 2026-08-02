@@ -51,7 +51,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 return candidates;
             }
 
-            context.CancellationToken.ThrowIfCancellationRequested();
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                return candidates;
+            }
             var samples = CollectSamples(
                 pixels, strideInts, width, height, context.CancellationToken);
             if (samples.Count == 0)
@@ -62,7 +65,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
             var centers = InitialiseCenters(samples, requested);
             for (int iteration = 0; iteration < 6; iteration++)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return candidates;
+                }
                 var sumL = new double[requested];
                 var sumA = new double[requested];
                 var sumB = new double[requested];
@@ -70,7 +76,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
                 foreach (Sample sample in samples)
                 {
-                    context.CancellationToken.ThrowIfCancellationRequested();
+                    if (context.CancellationToken.IsCancellationRequested)
+                    {
+                        return candidates;
+                    }
                     int nearest = NearestCenter(sample, centers);
                     weights[nearest] += sample.Weight;
                     sumL[nearest] += sample.L * sample.Weight;
@@ -100,7 +109,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
             };
             foreach (Sample center in centers)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return candidates;
+                }
                 selected.Add(candidates.FindNearest(center.L, center.A, center.B));
             }
 
@@ -130,7 +142,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
             var counts = new int[ColorQuantization.CacheSize];
             for (int y = 0; y < height; y++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return new List<Sample>();
+                }
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -143,7 +158,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
             {
                 if ((key & 4095) == 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return new List<Sample>();
+                    }
                 }
 
                 if (counts[key] == 0)

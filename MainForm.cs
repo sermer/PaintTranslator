@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using PaintTranslator.Data;
+using PaintTranslator.Controls;
 using PaintTranslator.Pigments;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
@@ -147,6 +148,12 @@ namespace PaintTranslator
         /// </summary>
         private const int StyleControlHorizontalMargin = 6;
 
+        /// <summary>
+        /// Keeps the paint catalog useful even when a style exposes enough parameters
+        /// for its own panel to scroll.
+        /// </summary>
+        private const int MinimumPaintListHeight = 120;
+
         /// <summary>Returns the usable width for a dynamic style label or slider.</summary>
         private int StyleControlWidth
         {
@@ -166,8 +173,8 @@ namespace PaintTranslator
         }
 
         /// <summary>
-        /// The number of discrete positions a parameter's <see cref="TrackBar"/>
-        /// offers. <see cref="TrackBar"/> is integer-valued, so every parameter is
+        /// The number of discrete positions a parameter's <see cref="ModernTrackBar"/>
+        /// offers. <see cref="ModernTrackBar"/> is integer-valued, so every parameter is
         /// carried on this fixed hundred-step scale and converted at the edges.
         /// Giving each parameter its own tick count instead would make a slider's feel
         /// depend on its units, rather than every slider covering its own range with
@@ -187,6 +194,7 @@ namespace PaintTranslator
             colorWheelMenu.Items.Add(
                 "Selected Golden Paints", null, SelectedPaintColorWheelMenuItem_Click);
             stylePanel.Resize += StylePanel_Resize;
+            palettePanel.Resize += PalettePanel_Resize;
             previewTimer = new System.Windows.Forms.Timer
             {
                 Interval = PreviewDebounceMilliseconds,
@@ -203,6 +211,13 @@ namespace PaintTranslator
             {
                 styleComboBox.Items.Add(style.Name);
             }
+
+            UiTheme.Apply(this);
+            toolbarPanel.BackColor = UiTheme.SurfaceRaised;
+            palettePanel.BackColor = UiTheme.Surface;
+            imageCanvas.BackColor = UiTheme.Canvas;
+            UiTheme.StylePrimaryButton(loadImageButton);
+            UiTheme.StyleMenu(colorWheelMenu);
 
             // Setting SelectedItem raises SelectedIndexChanged (the combo box starts
             // with no selection), which builds the panel for the default style. There
@@ -279,6 +294,11 @@ namespace PaintTranslator
         {
             CandidateSet candidates = candidateSetCache.GetOrCreate(
                 request.Paints, request.Style, request.Values, cancellationToken);
+            if (candidates == null || cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+
             return StylePipeline.Render(
                 request.Source, request.Paints, request.Style, request.MarkPixels,
                 request.Values, candidates, cancellationToken,
@@ -396,11 +416,6 @@ namespace PaintTranslator
                             SetAutomaticFullRenderInProgress(false);
                         }
                     }
-                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
-                    {
-                        // A newer UI state owns the next frame. Cancellation is an
-                        // expected control-flow path, not a conversion failure.
-                    }
                     catch (Exception ex)
                     {
                         System.Diagnostics.Debug.WriteLine($"Automatic render failed: {ex}");
@@ -425,16 +440,46 @@ namespace PaintTranslator
             ConversionRenderRequest request,
             CancellationToken cancellationToken)
         {
-            await renderGate.WaitAsync(cancellationToken);
+            if (!await WaitForRenderSlotAsync(cancellationToken))
+            {
+                return null;
+            }
+
             try
             {
                 return await Task.Run(
-                    () => RenderCapturedRequest(request, cancellationToken), cancellationToken);
+                    () => RenderCapturedRequest(request, cancellationToken));
             }
             finally
             {
                 renderGate.Release();
             }
+        }
+
+        /// <summary>
+        /// Acquires the render slot without awaiting a token-cancelled task. A short
+        /// asynchronous poll keeps the UI responsive and makes cancellation a normal
+        /// false result instead of an <see cref="OperationCanceledException"/>.
+        /// </summary>
+        private async Task<bool> WaitForRenderSlotAsync(CancellationToken cancellationToken)
+        {
+            while (!renderGate.Wait(0))
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return false;
+                }
+
+                await Task.Delay(10);
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                renderGate.Release();
+                return false;
+            }
+
+            return true;
         }
 
         /// <summary>Returns whether a completed automatic frame still describes the current controls.</summary>
@@ -536,12 +581,11 @@ namespace PaintTranslator
                         };
                         stylePanel.Controls.Add(caption);
 
-                        var trackBar = new TrackBar
+                        var trackBar = new ModernTrackBar
                         {
                             AutoSize = false,
                             Minimum = 0,
                             Maximum = TrackBarSteps,
-                            TickStyle = TickStyle.None,
                             Width = controlWidth,
                             Height = 36,
                             Margin = new Padding(3, 0, 3, 4),
@@ -551,17 +595,60 @@ namespace PaintTranslator
                         // The shared handler needs the declaration to convert the raw
                         // position back to a value, the values instance to write it
                         // into, and the caption to update — everything it cannot get
-                        // from the TrackBar itself.
+                        // from the ModernTrackBar itself.
                         trackBar.Tag = (stage, parameter, stageValues, caption);
                         trackBar.ValueChanged += StyleParameterTrackBar_ValueChanged;
                         stylePanel.Controls.Add(trackBar);
                     }
                 }
+
+                UiTheme.Apply(stylePanel);
             }
             finally
             {
                 stylePanel.ResumeLayout();
             }
+
+            UpdateStylePanelHeight();
+        }
+
+        /// <summary>
+        /// Gives the style controls only the height their content needs, up to the
+        /// point where preserving a usable, scrollable paint catalog takes priority.
+        /// </summary>
+        private void UpdateStylePanelHeight()
+        {
+            int contentHeight = 0;
+            foreach (Control control in stylePanel.Controls)
+            {
+                contentHeight += control.Height + control.Margin.Vertical;
+            }
+
+            int fixedHeight =
+                editPaletteButton.Height +
+                selectAllCheckBox.Height +
+                resetStyleButton.Height +
+                styleLabel.Height +
+                styleComboBox.Height +
+                markLabel.Height +
+                markTrackBar.Height +
+                blurLabel.Height +
+                blurTrackBar.Height;
+            int maximumHeight = Math.Max(
+                0,
+                palettePanel.DisplayRectangle.Height - fixedHeight - MinimumPaintListHeight);
+            int desiredHeight = Math.Min(contentHeight + 4, maximumHeight);
+
+            if (stylePanel.Height != desiredHeight)
+            {
+                stylePanel.Height = desiredHeight;
+            }
+        }
+
+        /// <summary>Rebalances the two scrollable sidebar areas after a window resize.</summary>
+        private void PalettePanel_Resize(object sender, EventArgs e)
+        {
+            UpdateStylePanelHeight();
         }
 
         /// <summary>
@@ -576,7 +663,7 @@ namespace PaintTranslator
             {
                 foreach (Control control in stylePanel.Controls)
                 {
-                    if (control is TrackBar || (control is Label label && !label.AutoSize))
+                    if (control is ModernTrackBar || (control is Label label && !label.AutoSize))
                     {
                         control.Width = width;
                     }
@@ -668,7 +755,7 @@ namespace PaintTranslator
         /// <param name="e">The event arguments.</param>
         private void StyleParameterTrackBar_ValueChanged(object sender, EventArgs e)
         {
-            var trackBar = (TrackBar)sender;
+            var trackBar = (ModernTrackBar)sender;
             (IPipelineStage _, StyleParameter parameter, ParameterValues values, Label caption) =
                 ((IPipelineStage, StyleParameter, ParameterValues, Label))trackBar.Tag;
 
@@ -1122,62 +1209,6 @@ namespace PaintTranslator
         }
 
         /// <summary>
-        /// Converts the loaded photo to use only colors mixable from the checked
-        /// paints and displays the result. Runs the conversion off the UI thread,
-        /// with the image and paint controls disabled until it finishes.
-        /// </summary>
-        /// <param name="sender">The button that raised the event.</param>
-        /// <param name="e">The event arguments.</param>
-        private async void ConvertPhotoButton_Click(object sender, EventArgs e)
-        {
-            if (sourceFrame == null)
-            {
-                MessageBox.Show(this, "Load a photo first, then convert it.",
-                    "No photo loaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            CancelPreview();
-            ConversionRenderRequest request = CaptureRenderRequest(preview: false);
-            if (request == null)
-            {
-                MessageBox.Show(this, "Select at least one paint to convert with.",
-                    "No paints selected", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                return;
-            }
-
-            // Keep explicit image operations serialized so a load cannot replace
-            // the display while this result is being committed.
-            SetImageOperationInProgress(true);
-            try
-            {
-                Bitmap converted;
-                await renderGate.WaitAsync();
-                try
-                {
-                    converted = await Task.Run(() => RenderCapturedRequest(request));
-                }
-                finally
-                {
-                    renderGate.Release();
-                }
-
-                SetDisplayedImage(converted);
-                displayedWheel = ColorWheelDisplay.None;
-                Text = $"Paint Translator - {sourcePhotoName} (converted to paints)";
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(this, $"Could not convert the photo:\n{ex.Message}",
-                    "Conversion failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
-                SetImageOperationInProgress(false);
-            }
-        }
-
-        /// <summary>
         /// Updates the blur label to read back the slider's current radius, since a
         /// bare slider gives no indication of the value it is sitting on.
         /// </summary>
@@ -1338,11 +1369,10 @@ namespace PaintTranslator
         /// <param name="e">The paint event arguments providing the graphics surface.</param>
         private void ImageCanvas_Paint(object sender, PaintEventArgs e)
         {
-            // The canvas has already drawn the image in its own OnPaint; with nothing loaded
-            // there is no overlay to draw, so the empty area advertises how to load one.
+            // The canvas draws its own empty-state card. This handler is responsible only
+            // for overlays that require a loaded image.
             if (imageCanvas.Image == null)
             {
-                DrawEmptyCanvasHint(e.Graphics);
                 return;
             }
 
@@ -1363,28 +1393,6 @@ namespace PaintTranslator
 
             // Drawn last so the tooltip sits above the grid lines.
             DrawBlendTooltip(e.Graphics);
-        }
-
-        /// <summary>
-        /// Draws the prompt shown on the empty canvas, so the drop and paste gestures are
-        /// discoverable rather than having to be guessed at.
-        /// </summary>
-        /// <param name="graphics">The graphics surface to draw on.</param>
-        private void DrawEmptyCanvasHint(Graphics graphics)
-        {
-            const string Hint = "Drop an image here, paste one with Ctrl+V, or use Load Image...";
-
-            // Dimmed rather than full white: the prompt should read as a placeholder and
-            // not compete with an image once one is loaded over it.
-            using (var brush = new SolidBrush(Color.FromArgb(150, 235, 235, 235)))
-            using (var format = new StringFormat
-            {
-                Alignment = StringAlignment.Center,
-                LineAlignment = StringAlignment.Center,
-            })
-            {
-                graphics.DrawString(Hint, Font, brush, imageCanvas.ClientRectangle, format);
-            }
         }
 
         /// <summary>
@@ -1762,13 +1770,12 @@ namespace PaintTranslator
 
             Rectangle box = GetBlendTooltipBounds();
 
-            // A translucent dark box with a light border stays legible over both
-            // light and dark image areas.
-            using (var background = new SolidBrush(Color.FromArgb(220, 32, 32, 32)))
+            // An opaque themed card stays legible over both light and dark images.
+            using (var background = new SolidBrush(Color.FromArgb(242, UiTheme.SurfaceRaised)))
             {
                 graphics.FillRectangle(background, box);
             }
-            using (var border = new Pen(Color.FromArgb(220, 180, 180, 180)))
+            using (var border = new Pen(UiTheme.Border))
             {
                 graphics.DrawRectangle(border, box.X, box.Y, box.Width - 1, box.Height - 1);
             }
@@ -1777,7 +1784,7 @@ namespace PaintTranslator
             foreach (string line in blendTooltipLines)
             {
                 TextRenderer.DrawText(graphics, line, Font,
-                    new Point(box.X + TooltipPadding, textY), Color.White, TextFormatFlags.NoPadding);
+                    new Point(box.X + TooltipPadding, textY), UiTheme.Text, TextFormatFlags.NoPadding);
                 textY += Font.Height;
             }
         }

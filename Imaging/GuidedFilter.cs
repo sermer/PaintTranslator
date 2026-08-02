@@ -68,7 +68,10 @@ namespace PaintTranslator.Imaging
                 return;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
 
             // Comparing against a variance, not against a difference, so the threshold
             // is squared exactly once here rather than at every pixel.
@@ -87,12 +90,18 @@ namespace PaintTranslator.Imaging
             {
                 for (int shift = LinearPlanes.RedShift; shift >= LinearPlanes.BlueShift; shift -= 8)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
                     LinearPlanes.Decode(pixels, strideInts, width, height, shift, image);
 
                     for (int pass = 0; pass < iterations; pass++)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
                         BoxFilter(image, mean, scratch, width, height, radius, cancellationToken);
                         Square(image, correlation, width, height, cancellationToken);
                         BoxFilter(correlation, correlation, scratch, width, height, radius, cancellationToken);
@@ -104,7 +113,10 @@ namespace PaintTranslator.Imaging
                             image, slope, offset, width, height, cancellationToken);
                     }
 
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
                     LinearPlanes.Encode(image, pixels, strideInts, width, height, shift);
                 }
             }
@@ -126,11 +138,13 @@ namespace PaintTranslator.Imaging
             int height,
             CancellationToken cancellationToken)
         {
-            Parallel.For(0, height, new ParallelOptions
+            Parallel.For(0, height, y =>
             {
-                CancellationToken = cancellationToken,
-            }, y =>
-            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int first = y * width;
                 int end = first + width;
                 for (int i = first; i < end; i++)
@@ -150,12 +164,14 @@ namespace PaintTranslator.Imaging
             double epsilon,
             CancellationToken cancellationToken)
         {
-            Parallel.For(0, height, new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-            }, y =>
+            Parallel.For(0, height, y =>
             {
                 int first = y * width;
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int end = first + width;
                 for (int i = first; i < end; i++)
                 {
@@ -178,11 +194,13 @@ namespace PaintTranslator.Imaging
             int height,
             CancellationToken cancellationToken)
         {
-            Parallel.For(0, height, new ParallelOptions
+            Parallel.For(0, height, y =>
             {
-                CancellationToken = cancellationToken,
-            }, y =>
-            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int first = y * width;
                 int end = first + width;
                 for (int i = first; i < end; i++)
@@ -216,12 +234,14 @@ namespace PaintTranslator.Imaging
             int radius,
             CancellationToken cancellationToken)
         {
-            Parallel.For(0, height, new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-            }, y =>
+            Parallel.For(0, height, y =>
             {
                 int row = y * width;
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 double running = 0.0;
                 for (int x = 0; x < Math.Min(radius + 1, width); x++)
                 {
@@ -247,15 +267,21 @@ namespace PaintTranslator.Imaging
                 }
             });
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
             const int ColumnsPerPartition = 128;
             int partitionCount = (width + ColumnsPerPartition - 1) / ColumnsPerPartition;
-            Parallel.For(0, partitionCount, new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-            }, partition =>
+            Parallel.For(0, partitionCount, partition =>
             {
                 int firstColumn = partition * ColumnsPerPartition;
                 int lastColumn = Math.Min(firstColumn + ColumnsPerPartition, width);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int columnCount = lastColumn - firstColumn;
                 double[] running = ArrayPool<double>.Shared.Rent(columnCount);
                 Array.Clear(running, 0, columnCount);
@@ -275,6 +301,11 @@ namespace PaintTranslator.Imaging
                     {
                         int low = Math.Max(y - radius, 0);
                         int high = Math.Min(y + radius, height - 1);
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            return;
+                        }
+
                         int sampleCount = high - low + 1;
                         int destinationRow = (y * width) + firstColumn;
                         for (int column = 0; column < columnCount; column++)

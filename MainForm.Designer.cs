@@ -45,12 +45,11 @@ namespace PaintTranslator
             this.stylePanel = new System.Windows.Forms.FlowLayoutPanel();
             this.resetStyleButton = new System.Windows.Forms.Button();
             this.styleLabel = new System.Windows.Forms.Label();
-            this.styleComboBox = new System.Windows.Forms.ComboBox();
+            this.styleComboBox = new PaintTranslator.Controls.ModernComboBox();
             this.blurLabel = new System.Windows.Forms.Label();
-            this.blurTrackBar = new System.Windows.Forms.TrackBar();
+            this.blurTrackBar = new PaintTranslator.Controls.ModernTrackBar();
             this.markLabel = new System.Windows.Forms.Label();
-            this.markTrackBar = new System.Windows.Forms.TrackBar();
-            this.convertPhotoButton = new System.Windows.Forms.Button();
+            this.markTrackBar = new PaintTranslator.Controls.ModernTrackBar();
             this.toolbarPanel.SuspendLayout();
             this.palettePanel.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)(this.columnsNumericUpDown)).BeginInit();
@@ -72,24 +71,24 @@ namespace PaintTranslator
             this.toolbarPanel.Dock = System.Windows.Forms.DockStyle.Top;
             this.toolbarPanel.Location = new System.Drawing.Point(0, 0);
             this.toolbarPanel.Name = "toolbarPanel";
-            this.toolbarPanel.Size = new System.Drawing.Size(984, 54);
+            this.toolbarPanel.Size = new System.Drawing.Size(1180, 64);
             this.toolbarPanel.TabIndex = 0;
             //
             // loadImageButton
             //
-            this.loadImageButton.Location = new System.Drawing.Point(12, 12);
+            this.loadImageButton.Location = new System.Drawing.Point(16, 14);
             this.loadImageButton.Name = "loadImageButton";
-            this.loadImageButton.Size = new System.Drawing.Size(110, 30);
+            this.loadImageButton.Size = new System.Drawing.Size(118, 36);
             this.loadImageButton.TabIndex = 1;
-            this.loadImageButton.Text = "Load Image...";
+            this.loadImageButton.Text = "Open Photo";
             this.loadImageButton.UseVisualStyleBackColor = true;
             this.loadImageButton.Click += new System.EventHandler(this.LoadImageButton_Click);
             //
             // generateWheelButton
             //
-            this.generateWheelButton.Location = new System.Drawing.Point(128, 12);
+            this.generateWheelButton.Location = new System.Drawing.Point(146, 14);
             this.generateWheelButton.Name = "generateWheelButton";
-            this.generateWheelButton.Size = new System.Drawing.Size(160, 30);
+            this.generateWheelButton.Size = new System.Drawing.Size(150, 36);
             this.generateWheelButton.TabIndex = 2;
             this.generateWheelButton.Text = "Color Wheel...";
             this.generateWheelButton.UseVisualStyleBackColor = true;
@@ -98,19 +97,19 @@ namespace PaintTranslator
             // columnsLabel
             //
             this.columnsLabel.AutoSize = true;
-            this.columnsLabel.Location = new System.Drawing.Point(312, 19);
+            this.columnsLabel.Location = new System.Drawing.Point(326, 23);
             this.columnsLabel.Name = "columnsLabel";
             this.columnsLabel.Size = new System.Drawing.Size(58, 15);
             this.columnsLabel.TabIndex = 3;
-            this.columnsLabel.Text = "Columns:";
+            this.columnsLabel.Text = "Grid columns";
             //
             // columnsNumericUpDown
             //
-            this.columnsNumericUpDown.Location = new System.Drawing.Point(376, 16);
+            this.columnsNumericUpDown.Location = new System.Drawing.Point(414, 19);
             this.columnsNumericUpDown.Maximum = new decimal(new int[] { 200, 0, 0, 0 });
             this.columnsNumericUpDown.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             this.columnsNumericUpDown.Name = "columnsNumericUpDown";
-            this.columnsNumericUpDown.Size = new System.Drawing.Size(60, 23);
+            this.columnsNumericUpDown.Size = new System.Drawing.Size(64, 27);
             this.columnsNumericUpDown.TabIndex = 4;
             this.columnsNumericUpDown.Value = new decimal(new int[] { 2, 0, 0, 0 });
             this.columnsNumericUpDown.ValueChanged += new System.EventHandler(this.GridSettingsChanged);
@@ -118,19 +117,19 @@ namespace PaintTranslator
             // rowsLabel
             //
             this.rowsLabel.AutoSize = true;
-            this.rowsLabel.Location = new System.Drawing.Point(452, 19);
+            this.rowsLabel.Location = new System.Drawing.Point(500, 23);
             this.rowsLabel.Name = "rowsLabel";
             this.rowsLabel.Size = new System.Drawing.Size(38, 15);
             this.rowsLabel.TabIndex = 5;
-            this.rowsLabel.Text = "Rows:";
+            this.rowsLabel.Text = "Rows";
             //
             // rowsNumericUpDown
             //
-            this.rowsNumericUpDown.Location = new System.Drawing.Point(496, 16);
+            this.rowsNumericUpDown.Location = new System.Drawing.Point(548, 19);
             this.rowsNumericUpDown.Maximum = new decimal(new int[] { 200, 0, 0, 0 });
             this.rowsNumericUpDown.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
             this.rowsNumericUpDown.Name = "rowsNumericUpDown";
-            this.rowsNumericUpDown.Size = new System.Drawing.Size(60, 23);
+            this.rowsNumericUpDown.Size = new System.Drawing.Size(64, 27);
             this.rowsNumericUpDown.TabIndex = 6;
             this.rowsNumericUpDown.Value = new decimal(new int[] { 2, 0, 0, 0 });
             this.rowsNumericUpDown.ValueChanged += new System.EventHandler(this.GridSettingsChanged);
@@ -138,7 +137,7 @@ namespace PaintTranslator
             // showGridCheckBox
             //
             this.showGridCheckBox.AutoSize = true;
-            this.showGridCheckBox.Location = new System.Drawing.Point(576, 18);
+            this.showGridCheckBox.Location = new System.Drawing.Point(632, 22);
             this.showGridCheckBox.Name = "showGridCheckBox";
             this.showGridCheckBox.Size = new System.Drawing.Size(80, 19);
             this.showGridCheckBox.TabIndex = 7;
@@ -149,9 +148,9 @@ namespace PaintTranslator
             // magnifierCheckBox
             //
             this.magnifierCheckBox.Appearance = System.Windows.Forms.Appearance.Button;
-            this.magnifierCheckBox.Location = new System.Drawing.Point(672, 12);
+            this.magnifierCheckBox.Location = new System.Drawing.Point(738, 14);
             this.magnifierCheckBox.Name = "magnifierCheckBox";
-            this.magnifierCheckBox.Size = new System.Drawing.Size(100, 30);
+            this.magnifierCheckBox.Size = new System.Drawing.Size(100, 36);
             this.magnifierCheckBox.TabIndex = 8;
             this.magnifierCheckBox.Text = "🔍 Zoom";
             this.magnifierCheckBox.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
@@ -163,9 +162,9 @@ namespace PaintTranslator
             this.imageCanvas.AllowDrop = true;
             this.imageCanvas.BackColor = System.Drawing.Color.FromArgb(((int)(((byte)(30)))), ((int)(((byte)(30)))), ((int)(((byte)(30)))));
             this.imageCanvas.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.imageCanvas.Location = new System.Drawing.Point(0, 54);
+            this.imageCanvas.Location = new System.Drawing.Point(0, 64);
             this.imageCanvas.Name = "imageCanvas";
-            this.imageCanvas.Size = new System.Drawing.Size(984, 607);
+            this.imageCanvas.Size = new System.Drawing.Size(1180, 696);
             this.imageCanvas.TabIndex = 8;
             this.imageCanvas.TabStop = false;
             this.imageCanvas.DragDrop += new System.Windows.Forms.DragEventHandler(this.ImageDragDrop);
@@ -188,11 +187,11 @@ namespace PaintTranslator
             this.palettePanel.Controls.Add(this.markTrackBar);
             this.palettePanel.Controls.Add(this.blurLabel);
             this.palettePanel.Controls.Add(this.blurTrackBar);
-            this.palettePanel.Controls.Add(this.convertPhotoButton);
             this.palettePanel.Dock = System.Windows.Forms.DockStyle.Right;
-            this.palettePanel.Location = new System.Drawing.Point(734, 54);
+            this.palettePanel.Location = new System.Drawing.Point(880, 64);
             this.palettePanel.Name = "palettePanel";
-            this.palettePanel.Size = new System.Drawing.Size(250, 607);
+            this.palettePanel.Padding = new System.Windows.Forms.Padding(16);
+            this.palettePanel.Size = new System.Drawing.Size(300, 696);
             this.palettePanel.TabIndex = 9;
             //
             // editPaletteButton
@@ -200,7 +199,7 @@ namespace PaintTranslator
             this.editPaletteButton.Dock = System.Windows.Forms.DockStyle.Top;
             this.editPaletteButton.Location = new System.Drawing.Point(0, 0);
             this.editPaletteButton.Name = "editPaletteButton";
-            this.editPaletteButton.Size = new System.Drawing.Size(250, 28);
+            this.editPaletteButton.Size = new System.Drawing.Size(250, 36);
             this.editPaletteButton.TabIndex = 14;
             this.editPaletteButton.Text = "Edit Palette...";
             this.editPaletteButton.UseVisualStyleBackColor = true;
@@ -213,7 +212,7 @@ namespace PaintTranslator
             this.stylePanel.FlowDirection = System.Windows.Forms.FlowDirection.TopDown;
             this.stylePanel.Location = new System.Drawing.Point(0, 254);
             this.stylePanel.Name = "stylePanel";
-            this.stylePanel.Size = new System.Drawing.Size(250, 120);
+            this.stylePanel.Size = new System.Drawing.Size(250, 160);
             this.stylePanel.TabIndex = 20;
             this.stylePanel.WrapContents = false;
             //
@@ -222,7 +221,7 @@ namespace PaintTranslator
             this.resetStyleButton.Dock = System.Windows.Forms.DockStyle.Bottom;
             this.resetStyleButton.Location = new System.Drawing.Point(0, 374);
             this.resetStyleButton.Name = "resetStyleButton";
-            this.resetStyleButton.Size = new System.Drawing.Size(250, 28);
+            this.resetStyleButton.Size = new System.Drawing.Size(250, 34);
             this.resetStyleButton.TabIndex = 21;
             this.resetStyleButton.Text = "Reset to style defaults";
             this.resetStyleButton.UseVisualStyleBackColor = true;
@@ -236,7 +235,7 @@ namespace PaintTranslator
             this.selectAllCheckBox.Location = new System.Drawing.Point(0, 0);
             this.selectAllCheckBox.Name = "selectAllCheckBox";
             this.selectAllCheckBox.Padding = new System.Windows.Forms.Padding(6, 2, 0, 0);
-            this.selectAllCheckBox.Size = new System.Drawing.Size(250, 24);
+            this.selectAllCheckBox.Size = new System.Drawing.Size(250, 30);
             this.selectAllCheckBox.TabIndex = 10;
             this.selectAllCheckBox.Text = "Select all";
             this.selectAllCheckBox.UseVisualStyleBackColor = true;
@@ -260,7 +259,7 @@ namespace PaintTranslator
             this.blurLabel.Location = new System.Drawing.Point(0, 508);
             this.blurLabel.Name = "blurLabel";
             this.blurLabel.Padding = new System.Windows.Forms.Padding(6, 0, 0, 0);
-            this.blurLabel.Size = new System.Drawing.Size(250, 20);
+            this.blurLabel.Size = new System.Drawing.Size(250, 24);
             this.blurLabel.TabIndex = 15;
             this.blurLabel.Text = "Blur: 2 px";
             this.blurLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
@@ -271,7 +270,7 @@ namespace PaintTranslator
             this.blurTrackBar.Location = new System.Drawing.Point(0, 528);
             this.blurTrackBar.Maximum = 20;
             this.blurTrackBar.Name = "blurTrackBar";
-            this.blurTrackBar.Size = new System.Drawing.Size(250, 45);
+            this.blurTrackBar.Size = new System.Drawing.Size(250, 38);
             this.blurTrackBar.TabIndex = 13;
             this.blurTrackBar.TickFrequency = 2;
             this.blurTrackBar.Value = 2;
@@ -284,7 +283,7 @@ namespace PaintTranslator
             this.styleLabel.Location = new System.Drawing.Point(0, 402);
             this.styleLabel.Name = "styleLabel";
             this.styleLabel.Padding = new System.Windows.Forms.Padding(6, 0, 0, 0);
-            this.styleLabel.Size = new System.Drawing.Size(250, 20);
+            this.styleLabel.Size = new System.Drawing.Size(250, 24);
             this.styleLabel.TabIndex = 18;
             this.styleLabel.Text = "Style";
             this.styleLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
@@ -296,7 +295,7 @@ namespace PaintTranslator
             this.styleComboBox.FormattingEnabled = true;
             this.styleComboBox.Location = new System.Drawing.Point(0, 422);
             this.styleComboBox.Name = "styleComboBox";
-            this.styleComboBox.Size = new System.Drawing.Size(250, 21);
+            this.styleComboBox.Size = new System.Drawing.Size(250, 34);
             this.styleComboBox.TabIndex = 19;
             this.styleComboBox.SelectedIndexChanged += new System.EventHandler(this.StyleComboBox_SelectedIndexChanged);
             //
@@ -307,7 +306,7 @@ namespace PaintTranslator
             this.markLabel.Location = new System.Drawing.Point(0, 443);
             this.markLabel.Name = "markLabel";
             this.markLabel.Padding = new System.Windows.Forms.Padding(6, 0, 0, 0);
-            this.markLabel.Size = new System.Drawing.Size(250, 20);
+            this.markLabel.Size = new System.Drawing.Size(250, 24);
             this.markLabel.TabIndex = 16;
             this.markLabel.Text = "Brush mark: 3 px";
             this.markLabel.TextAlign = System.Drawing.ContentAlignment.MiddleLeft;
@@ -319,33 +318,22 @@ namespace PaintTranslator
             this.markTrackBar.Minimum = 1;
             this.markTrackBar.Maximum = 128;
             this.markTrackBar.Name = "markTrackBar";
-            this.markTrackBar.Size = new System.Drawing.Size(250, 45);
+            this.markTrackBar.Size = new System.Drawing.Size(250, 38);
             this.markTrackBar.TabIndex = 17;
             this.markTrackBar.TickFrequency = 16;
             this.markTrackBar.Value = 3;
             this.markTrackBar.ValueChanged += new System.EventHandler(this.MarkTrackBar_ValueChanged);
-            //
-            // convertPhotoButton
-            //
-            this.convertPhotoButton.Dock = System.Windows.Forms.DockStyle.Bottom;
-            this.convertPhotoButton.Location = new System.Drawing.Point(0, 573);
-            this.convertPhotoButton.Name = "convertPhotoButton";
-            this.convertPhotoButton.Size = new System.Drawing.Size(250, 34);
-            this.convertPhotoButton.TabIndex = 12;
-            this.convertPhotoButton.Text = "Convert Photo to Paints";
-            this.convertPhotoButton.UseVisualStyleBackColor = true;
-            this.convertPhotoButton.Click += new System.EventHandler(this.ConvertPhotoButton_Click);
             //
             // MainForm
             //
             this.AllowDrop = true;
             this.AutoScaleDimensions = new System.Drawing.SizeF(7F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(984, 661);
+            this.ClientSize = new System.Drawing.Size(1180, 760);
             this.Controls.Add(this.imageCanvas);
             this.Controls.Add(this.palettePanel);
             this.Controls.Add(this.toolbarPanel);
-            this.MinimumSize = new System.Drawing.Size(720, 480);
+            this.MinimumSize = new System.Drawing.Size(900, 600);
             this.Name = "MainForm";
             this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Text = "Paint Translator";
@@ -380,11 +368,10 @@ namespace PaintTranslator
         private System.Windows.Forms.Button resetStyleButton;
         private PaintTranslator.Controls.PaintCheckedListBox paintsCheckedListBox;
         private System.Windows.Forms.Label styleLabel;
-        private System.Windows.Forms.ComboBox styleComboBox;
+        private PaintTranslator.Controls.ModernComboBox styleComboBox;
         private System.Windows.Forms.Label blurLabel;
-        private System.Windows.Forms.TrackBar blurTrackBar;
+        private PaintTranslator.Controls.ModernTrackBar blurTrackBar;
         private System.Windows.Forms.Label markLabel;
-        private System.Windows.Forms.TrackBar markTrackBar;
-        private System.Windows.Forms.Button convertPhotoButton;
+        private PaintTranslator.Controls.ModernTrackBar markTrackBar;
     }
 }

@@ -41,7 +41,7 @@ namespace PaintTranslator.Imaging
         /// <param name="preparedCandidates">A palette-compatible set prepared by
         /// <see cref="PrepareCandidates"/>, or null to build it during this call.</param>
         /// <returns>A new 32-bit ARGB bitmap, or null when cancellation is observed
-        /// during cooperative post-map processing.</returns>
+        /// during any cooperative rendering phase.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/>,
         /// <paramref name="paints"/>, <paramref name="style"/> or <paramref name="values"/>
         /// is null.</exception>
@@ -102,9 +102,17 @@ namespace PaintTranslator.Imaging
             // The candidate transform can only narrow or reshape which mixtures get
             // sampled, so it has to run before Build() rather than after — there is
             // no way to remove a candidate once it has already become a colour.
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             long phaseStarted = diagnostics?.Begin() ?? 0L;
             CandidateSet candidates = preparedCandidates ?? PrepareCandidates(paints, style, values, cancellationToken);
+            if (candidates == null || cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+
             diagnostics?.End(preparedCandidates == null ? "Candidates: build" : "Candidates: reuse", phaseStarted);
 
             phaseStarted = diagnostics?.Begin() ?? 0L;
@@ -135,10 +143,16 @@ namespace PaintTranslator.Imaging
 
             try
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return null;
+                }
                 foreach (IPreMapStage stage in style.PreMap)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
                     phaseStarted = diagnostics?.Begin() ?? 0L;
                     stage.Apply(pixels, strideInts, width, height, in context, values[stage]);
                     diagnostics?.End("Pre-map: " + stage.DisplayName, phaseStarted);
@@ -146,11 +160,18 @@ namespace PaintTranslator.Imaging
 
                 if (style.Candidates is IImageAwareCandidateTransform imageAwareCandidates)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
                     phaseStarted = diagnostics?.Begin() ?? 0L;
                     candidates = imageAwareCandidates.Transform(
                         candidates, pixels, strideInts, width, height, in context, values[style.Candidates]);
                     diagnostics?.End("Candidates: image-aware", phaseStarted);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
 
                     phaseStarted = diagnostics?.Begin() ?? 0L;
                     achievableMaxChroma = candidates.MaximumChroma;
@@ -178,6 +199,10 @@ namespace PaintTranslator.Imaging
                         candidates, context, resolved);
                 }
                 diagnostics?.End("Mapping", phaseStarted);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return null;
+                }
 
                 foreach (IPostMapStage stage in style.PostMap)
                 {
@@ -253,10 +278,16 @@ namespace PaintTranslator.Imaging
                 throw new ArgumentNullException(nameof(values));
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             var builder = new MixtureBuilder(paints);
             style.Candidates.Transform(builder, values[style.Candidates]);
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             return builder.Build(cancellationToken);
         }
 
@@ -368,7 +399,10 @@ namespace PaintTranslator.Imaging
             var used = new bool[ColorQuantization.CacheSize];
             for (int y = 0; y < height; y++)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -381,7 +415,10 @@ namespace PaintTranslator.Imaging
             {
                 if ((key & 4095) == 0)
                 {
-                    context.CancellationToken.ThrowIfCancellationRequested();
+                    if (context.CancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
                 }
 
                 if (used[key])
@@ -395,11 +432,13 @@ namespace PaintTranslator.Imaging
 
             // Resolve every distinct colour in parallel; each entry is written by
             // exactly one iteration, so the shared array needs no locking.
-            Parallel.For(0, keys.Count, new ParallelOptions
+            Parallel.For(0, keys.Count, i =>
             {
-                CancellationToken = context.CancellationToken,
-            }, i =>
-            {
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int key = keys[i];
                 if (resolved[key] >= 0)
                 {
@@ -417,10 +456,18 @@ namespace PaintTranslator.Imaging
                     mappedL, mappedA, mappedB, candidates, 0, 0, in context, quantiserValues);
             });
 
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
             // Second pass: fan the per-colour answer out to every pixel.
             for (int y = 0; y < height; y++)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {
@@ -451,12 +498,14 @@ namespace PaintTranslator.Imaging
             ParameterValues remapValues = values[style.Remap];
             ParameterValues quantiserValues = values[style.Quantiser];
 
-            Parallel.For(0, height, new ParallelOptions
-            {
-                CancellationToken = context.CancellationToken,
-            }, y =>
+            Parallel.For(0, height, y =>
             {
                 int row = y * strideInts;
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 for (int x = 0; x < width; x++)
                 {
                     int pixel = pixels[row + x];
@@ -486,7 +535,10 @@ namespace PaintTranslator.Imaging
             {
                 if ((i & 4095) == 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return largest;
+                    }
                 }
 
                 double chroma = Math.Sqrt((candidates.A[i] * candidates.A[i]) + (candidates.B[i] * candidates.B[i]));
@@ -513,7 +565,10 @@ namespace PaintTranslator.Imaging
             {
                 if ((i & 4095) == 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return ceilings;
+                    }
                 }
 
                 double chroma = Math.Sqrt((candidates.A[i] * candidates.A[i]) + (candidates.B[i] * candidates.B[i]));

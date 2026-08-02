@@ -55,7 +55,10 @@ namespace PaintTranslator.Imaging
                 return;
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
 
             double[] kernel = BuildKernel(radius);
 
@@ -69,11 +72,17 @@ namespace PaintTranslator.Imaging
             {
                 for (int shift = LinearPlanes.RedShift; shift >= LinearPlanes.BlueShift; shift -= 8)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
                     LinearPlanes.Decode(pixels, strideInts, width, height, shift, plane);
                     BlurHorizontal(plane, scratch, width, height, kernel, radius, cancellationToken);
                     BlurVertical(scratch, plane, width, height, kernel, radius, cancellationToken);
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
                     LinearPlanes.Encode(plane, pixels, strideInts, width, height, shift);
                 }
             }
@@ -133,11 +142,13 @@ namespace PaintTranslator.Imaging
             int radius,
             CancellationToken cancellationToken)
         {
-            Parallel.For(0, height, new ParallelOptions
+            Parallel.For(0, height, y =>
             {
-                CancellationToken = cancellationToken,
-            }, y =>
-            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 int row = y * width;
                 for (int x = 0; x < width; x++)
                 {
@@ -178,12 +189,15 @@ namespace PaintTranslator.Imaging
             // from costing far more than the horizontal one: every read below is
             // sequential, where a per-pixel gather would stride a row width per tap and
             // miss the cache on every one of them.
-            Parallel.For(0, height, new ParallelOptions
-            {
-                CancellationToken = cancellationToken,
-            }, () => ArrayPool<double>.Shared.Rent(width), (y, state, row) =>
+            Parallel.For(0, height, () => ArrayPool<double>.Shared.Rent(width), (y, state, row) =>
             {
                 Array.Clear(row, 0, width);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    state.Stop();
+                    return row;
+                }
+
 
                 for (int offset = -radius; offset <= radius; offset++)
                 {

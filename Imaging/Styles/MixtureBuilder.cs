@@ -205,10 +205,14 @@ namespace PaintTranslator.Imaging.Styles
         /// before it is rendered, and any predicate from <see cref="KeepOnly"/>
         /// applied to the deduplicated result afterward.
         /// </summary>
-        /// <returns>The surviving candidates, indexed for nearest-colour search.</returns>
+        /// <returns>The surviving candidates, indexed for nearest-colour search, or
+        /// null when cancellation is observed.</returns>
         public CandidateSet Build(CancellationToken cancellationToken = default)
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             int count = paints.Count;
 
             // Enumerating the subsets up front turns three nested loops into two flat
@@ -219,7 +223,10 @@ namespace PaintTranslator.Imaging.Styles
             var triples = new List<(int First, int Second, int Third)>();
             for (int i = 0; i < count; i++)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return null;
+                }
                 for (int j = i + 1; j < count; j++)
                 {
                     pairs.Add((i, j));
@@ -234,21 +241,37 @@ namespace PaintTranslator.Imaging.Styles
             int pairBase = count;
             int tripleBase = pairBase + (pairs.Count * PairSamples);
             var sampled = new int[tripleBase + (triples.Count * perTriple)];
-            var parallelOptions = new ParallelOptions { CancellationToken = cancellationToken };
+            var parallelOptions = new ParallelOptions();
 
             // Each paint straight from the tube. A paint has no stored colour any more,
             // so even the unmixed swatch is the kernel evaluated at full concentration.
             Parallel.For(0, count, parallelOptions, () => new double[SpectralBands.Count], (i, state, reflectance) =>
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    state.Stop();
+                    return reflectance;
+                }
+
                 sampled[i] = RenderMixture(new[] { i }, new[] { 1.0 }, reflectance);
                 return reflectance;
             },
             _ => { });
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             // Every unordered pair, sampled along its mixing line.
             Parallel.For(0, pairs.Count, parallelOptions, () => new double[SpectralBands.Count], (p, state, reflectance) =>
             {
                 (int first, int second) = pairs[p];
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    state.Stop();
+                    return reflectance;
+                }
+
                 var baseIndices = new[] { first, second };
                 var baseShares = new double[2];
                 int at = pairBase + (p * PairSamples);
@@ -257,7 +280,11 @@ namespace PaintTranslator.Imaging.Styles
                 {
                     if ((sample & 15) == 0)
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            state.Stop();
+                            return reflectance;
+                        }
                     }
 
                     double share = (double)sample / (PairSamples + 1);
@@ -272,6 +299,10 @@ namespace PaintTranslator.Imaging.Styles
             },
             _ => { });
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             // Every unordered triple, sampled on a regular grid across the interior of
             // its mixing triangle. Combined with the pair samples this leaves the
             // achievable gamut covered closely enough that the residual is below what
@@ -280,6 +311,12 @@ namespace PaintTranslator.Imaging.Styles
             {
                 (int first, int second, int third) = triples[t];
                 var baseIndices = new[] { first, second, third };
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    state.Stop();
+                    return reflectance;
+                }
+
                 var baseShares = new double[3];
                 int at = tripleBase + (t * perTriple);
 
@@ -287,7 +324,11 @@ namespace PaintTranslator.Imaging.Styles
                 // paints present; the boundary is covered by the pair samples above.
                 for (int x = 1; x < TripleDivisions; x++)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        state.Stop();
+                        return reflectance;
+                    }
                     for (int y = 1; y < TripleDivisions - x; y++)
                     {
                         baseShares[0] = (double)x / TripleDivisions;
@@ -303,6 +344,10 @@ namespace PaintTranslator.Imaging.Styles
             },
             _ => { });
 
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             // Collapse the duplicates. Sampling finely enough to matter produces far more
             // mixtures than there are distinct 8-bit colours for them to land on, so most
             // of what was just computed collapses away here.
@@ -312,7 +357,10 @@ namespace PaintTranslator.Imaging.Styles
             {
                 if ((i & 4095) == 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
                 }
 
                 int argb = sampled[i];
@@ -333,7 +381,10 @@ namespace PaintTranslator.Imaging.Styles
             {
                 if ((i & 4095) == 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
                 }
 
                 int argb = argbArray[i];
@@ -354,7 +405,10 @@ namespace PaintTranslator.Imaging.Styles
             {
                 if ((i & 4095) == 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        return null;
+                    }
                 }
 
                 if (keepPredicate(l[i], a[i], b[i]))

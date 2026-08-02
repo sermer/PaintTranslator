@@ -22,8 +22,7 @@ namespace PaintTranslator.Tests
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
 
-            Assert.Throws<OperationCanceledException>(
-                () => new MixtureBuilder(ThreePaints()).Build(cancellation.Token));
+            Assert.Null(new MixtureBuilder(ThreePaints()).Build(cancellation.Token));
         }
 
         [Fact]

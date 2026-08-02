@@ -20,6 +20,7 @@ namespace PaintTranslator.Imaging.Styles
         /// Returns the candidates for the supplied palette state, building them only
         /// when the selected paints or a build-affecting transform parameter changed.
         /// </summary>
+        /// <returns>The cached or newly built set, or null when cancellation is observed.</returns>
         public CandidateSet GetOrCreate(
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
@@ -39,11 +40,17 @@ namespace PaintTranslator.Imaging.Styles
                 throw new ArgumentNullException(nameof(values));
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
             var key = new CandidateKey(paints, style.Candidates, values[style.Candidates]);
             lock (sync)
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return null;
+                }
                 for (LinkedListNode<Entry> node = entries.First; node != null; node = node.Next)
                 {
                     if (!key.Equals(node.Value.Key))
@@ -58,6 +65,11 @@ namespace PaintTranslator.Imaging.Styles
                 }
 
                 CandidateSet built = StylePipeline.PrepareCandidates(paints, style, values, cancellationToken);
+                if (built == null || cancellationToken.IsCancellationRequested)
+                {
+                    return null;
+                }
+
                 entries.AddFirst(new Entry(key, built));
                 if (entries.Count > MaximumEntries)
                 {

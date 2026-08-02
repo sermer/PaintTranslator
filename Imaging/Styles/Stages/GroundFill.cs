@@ -31,7 +31,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
 
             for (int y = 0; y < height; y++)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 for (int x = 0; x < width; x++)
                 {
                     int at = (y * strideInts) + x;
@@ -54,7 +57,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
                     {
                         if ((area & 4095) == 0)
                         {
-                            context.CancellationToken.ThrowIfCancellationRequested();
+                            if (context.CancellationToken.IsCancellationRequested)
+                            {
+                                return;
+                            }
                         }
 
                         int current = queue.Dequeue();
@@ -92,7 +98,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
             Region field = null;
             foreach (Region region in regions)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 if (!region.TouchesBorder || region.Area < minimumArea)
                 {
                     continue;
@@ -115,7 +124,10 @@ namespace PaintTranslator.Imaging.Styles.Stages
             int replacement = candidates.FindNearest(58.0, field.A * scale, field.B * scale);
             for (int y = 0; y < height; y++)
             {
-                context.CancellationToken.ThrowIfCancellationRequested();
+                if (context.CancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
                 int row = y * strideInts;
                 for (int x = 0; x < width; x++)
                 {

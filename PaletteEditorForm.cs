@@ -29,6 +29,9 @@ namespace PaintTranslator
         public PaletteEditorForm(ISet<string> currentPaletteNames)
         {
             InitializeComponent();
+            UiTheme.Apply(this);
+            buttonPanel.BackColor = UiTheme.SurfaceRaised;
+            UiTheme.StylePrimaryButton(okButton);
 
             // Populating fires ItemCheck per added item; suppress the select-all
             // sync until the list is complete, then set it once.

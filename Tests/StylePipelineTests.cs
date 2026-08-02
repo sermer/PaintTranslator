@@ -5,6 +5,7 @@ using System.Drawing.Imaging;
 using System.Threading;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
+using PaintTranslator.Imaging.Styles.Stages;
 using PaintTranslator.Pigments;
 using Xunit;
 
@@ -29,13 +30,40 @@ namespace PaintTranslator.Tests
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
 
-            Assert.Throws<OperationCanceledException>(() => StylePipeline.Render(
+            Assert.Null(StylePipeline.Render(
                 source,
                 ThreePaints(),
                 style,
                 0,
                 values,
                 cancellationToken: cancellation.Token));
+        }
+
+        [Fact]
+        public void RenderReturnsNullWithoutThrowingWhenCancelledInsideAStage()
+        {
+            using var cancellation = new CancellationTokenSource();
+            var cancellingStage = new CancellingStage(cancellation);
+            var style = new StyleDefinition(
+                "Cancellation test",
+                1.0,
+                new IPreMapStage[] { cancellingStage },
+                new IdentityRemap(),
+                new KeepAllCandidates(),
+                new NearestQuantiser(),
+                Array.Empty<IPostMapStage>());
+            IReadOnlyDictionary<IPipelineStage, ParameterValues> values =
+                StylePipeline.DefaultValues(style);
+            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(32, 32);
+
+            Assert.Null(StylePipeline.Render(
+                source,
+                ThreePaints(),
+                style,
+                0,
+                values,
+                cancellationToken: cancellation.Token));
+            Assert.True(cancellation.IsCancellationRequested);
         }
 
         /// <summary>
@@ -301,6 +329,26 @@ namespace PaintTranslator.Tests
             using Bitmap reused = StylePipeline.Render(source, paints, style, 3, values, prepared);
 
             AssertBitmapsIdentical(oneShot, reused);
+        }
+
+        private sealed class CancellingStage : IPreMapStage
+        {
+            private readonly CancellationTokenSource cancellation;
+
+            public CancellingStage(CancellationTokenSource cancellation)
+            {
+                this.cancellation = cancellation;
+            }
+
+            public string DisplayName => "Cancel";
+            public IReadOnlyList<StyleParameter> Parameters { get; } = Array.Empty<StyleParameter>();
+
+            public void Apply(
+                int[] pixels, int strideInts, int width, int height,
+                in RenderContext context, ParameterValues values)
+            {
+                cancellation.Cancel();
+            }
         }
 
         private static IReadOnlyList<PigmentCoefficients> ThreePaints()

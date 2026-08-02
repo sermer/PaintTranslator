@@ -370,12 +370,58 @@ namespace PaintTranslator.Controls
                 DrawImage(e.Graphics);
                 e.Graphics.Restore(state);
             }
+            else
+            {
+                DrawEmptyState(e.Graphics);
+            }
 
             // Raised last so the grid and tooltip land on top of the image, matching the
             // order PictureBox gave those overlays.
             base.OnPaint(e);
         }
 
+        private void DrawEmptyState(Graphics graphics)
+        {
+            int width = Math.Min(420, Math.Max(260, ClientSize.Width - 64));
+            int height = 168;
+            var card = new Rectangle(
+                (ClientSize.Width - width) / 2,
+                (ClientSize.Height - height) / 2,
+                width,
+                height);
+
+            graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            using (var background = new SolidBrush(Color.FromArgb(155, UiTheme.Surface)))
+            using (var border = new Pen(UiTheme.Border) { DashStyle = DashStyle.Dash })
+            {
+                graphics.FillRectangle(background, card);
+                graphics.DrawRectangle(border, card);
+            }
+
+            var accent = new Rectangle(card.Left + 28, card.Top + 31, 48, 4);
+            using (var accentBrush = new SolidBrush(UiTheme.Accent))
+            {
+                graphics.FillRectangle(accentBrush, accent);
+            }
+
+            var title = new Rectangle(card.Left + 28, card.Top + 51, card.Width - 56, 38);
+            TextRenderer.DrawText(
+                graphics,
+                "Drop a photo to begin",
+                UiTheme.EmptyStateTitleFont,
+                title,
+                UiTheme.Text,
+                TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+
+            var subtitle = new Rectangle(card.Left + 30, card.Top + 98, card.Width - 60, 44);
+            TextRenderer.DrawText(
+                graphics,
+                "Drag an image here, paste from the clipboard, or choose Open Photo.",
+                UiTheme.DefaultFont,
+                subtitle,
+                UiTheme.TextMuted,
+                TextFormatFlags.Left | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+        }
         /// <summary>
         /// Draws the visible part of the image at its current scale and position.
         /// </summary>

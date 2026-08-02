@@ -21,8 +21,7 @@ namespace PaintTranslator.Tests
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
 
-            Assert.Throws<OperationCanceledException>(
-                () => cache.GetOrCreate(paints, style, values, cancellation.Token));
+            Assert.Null(cache.GetOrCreate(paints, style, values, cancellation.Token));
 
             Assert.NotNull(cache.GetOrCreate(paints, style, values));
         }
