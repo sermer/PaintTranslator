@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
 using PaintTranslator.Imaging;
 using PaintTranslator.Pigments;
 using Xunit;
@@ -37,13 +36,13 @@ namespace PaintTranslator.Tests
         [Fact]
         public void TheMandatoryFloorRunsBeforeTheOptionalBlurNotAfter()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
             using Bitmap source = BuildEdgeWithNoise(64, 64);
 
             const int Mark = 8;
             const int BlurRadius = 6;
 
-            int[] expected = ReadPixels(source, out int stride);
+            int[] expected = StyleTestFixtures.ReadPixels(source, out int stride);
             int floorRadius = PalettePhotoConverter.FloorRadius(Mark);
 
             // The order this test insists on: the mandatory floor first, exactly as
@@ -57,7 +56,7 @@ namespace PaintTranslator.Tests
             int[] expectedMapped = PalettePhotoConverter.MapThroughIndex(paints, expected);
 
             using Bitmap converted = PalettePhotoConverter.Convert(source, paints, BlurRadius, Mark);
-            int[] actual = ReadPixels(converted, out int actualStride);
+            int[] actual = StyleTestFixtures.ReadPixels(converted, out int actualStride);
 
             int mismatches = 0;
             for (int y = 0; y < source.Height; y++)
@@ -79,16 +78,6 @@ namespace PaintTranslator.Tests
                 mismatches == 0,
                 $"{mismatches} of {source.Width * source.Height} pixels differed from the floor-then-blur " +
                 "ordering computed independently here — Convert is not running the floor before the blur.");
-        }
-
-        private static IReadOnlyList<PigmentCoefficients> ThreePaints()
-        {
-            return new[]
-            {
-                PigmentLibrary.Selectable[0],   // Titanium White
-                PigmentLibrary.Selectable[6],   // C.P. Cadmium Red Light
-                PigmentLibrary.Selectable[11],  // Ultramarine Blue
-            };
         }
 
         /// <summary>
@@ -120,26 +109,6 @@ namespace PaintTranslator.Tests
             }
 
             return bitmap;
-        }
-
-        private static int[] ReadPixels(Bitmap bitmap, out int strideInts)
-        {
-            BitmapData data = bitmap.LockBits(
-                new Rectangle(0, 0, bitmap.Width, bitmap.Height),
-                ImageLockMode.ReadOnly,
-                PixelFormat.Format32bppArgb);
-            try
-            {
-                strideInts = data.Stride / 4;
-                var pixels = new int[strideInts * bitmap.Height];
-                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-
-                return pixels;
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
-            }
         }
     }
 }

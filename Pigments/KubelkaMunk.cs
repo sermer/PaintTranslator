@@ -49,6 +49,13 @@ namespace PaintTranslator.Pigments
         private const double MinimumScattering = 1e-6;
 
         /// <summary>
+        /// The largest paint count whose normalised shares are held on the stack.
+        /// Real palettes stay far below this; the heap fallback only guards a
+        /// caller passing an unusually long list.
+        /// </summary>
+        private const int MaximumStackShares = 64;
+
+        /// <summary>
         /// Mixes paints and writes the mixture's reflectance spectrum.
         /// </summary>
         /// <param name="pigments">The participating paints.</param>
@@ -108,15 +115,25 @@ namespace PaintTranslator.Pigments
                     "Concentrations must not all be zero.", nameof(concentrations));
             }
 
+            // Shares are invariant across bands, so they are normalised once here
+            // rather than once per band inside the loop below. Stack-allocated to
+            // keep the kernel allocation-free for searches that call it in bulk.
+            Span<double> shares = pigments.Count <= MaximumStackShares
+                ? stackalloc double[pigments.Count]
+                : new double[pigments.Count];
+            for (int i = 0; i < pigments.Count; i++)
+            {
+                shares[i] = concentrations[i] / total;
+            }
+
             for (int band = 0; band < SpectralBands.Count; band++)
             {
                 double absorption = 0.0;
                 double scattering = 0.0;
                 for (int i = 0; i < pigments.Count; i++)
                 {
-                    double share = concentrations[i] / total;
-                    absorption += share * pigments[i].Absorption[band];
-                    scattering += share * pigments[i].Scattering[band];
+                    absorption += shares[i] * pigments[i].Absorption[band];
+                    scattering += shares[i] * pigments[i].Scattering[band];
                 }
 
                 reflectance[band] = Invert(absorption, scattering);
@@ -193,33 +210,45 @@ namespace PaintTranslator.Pigments
                 throw new ArgumentException("Concentrations must not all be zero.", nameof(concentrations));
             }
 
+            // Each paint's blend-adjusted share is invariant across bands, so the
+            // adjustment and normalisation run once here instead of once per band.
+            // Stack-allocated to keep the sampling loop that calls this in bulk
+            // allocation-free.
+            Span<double> shares = indices.Count <= MaximumStackShares
+                ? stackalloc double[indices.Count]
+                : new double[indices.Count];
+            for (int i = 0; i < indices.Count; i++)
+            {
+                double adjusted = concentrations[i];
+                if (blendIndex >= 0 && blendFraction > 0.0)
+                {
+                    adjusted *= 1.0 - blendFraction;
+                    if (i == existingBlendSlot)
+                    {
+                        adjusted += blendFraction;
+                    }
+                }
+
+                shares[i] = adjusted / total;
+            }
+
+            double appendShare = appendBlend ? blendFraction / total : 0.0;
+
             for (int band = 0; band < SpectralBands.Count; band++)
             {
                 double absorption = 0.0;
                 double scattering = 0.0;
                 for (int i = 0; i < indices.Count; i++)
                 {
-                    double adjusted = concentrations[i];
-                    if (blendIndex >= 0 && blendFraction > 0.0)
-                    {
-                        adjusted *= 1.0 - blendFraction;
-                        if (i == existingBlendSlot)
-                        {
-                            adjusted += blendFraction;
-                        }
-                    }
-
-                    double share = adjusted / total;
                     PigmentCoefficients pigment = palette[indices[i]];
-                    absorption += share * pigment.Absorption[band];
-                    scattering += share * pigment.Scattering[band];
+                    absorption += shares[i] * pigment.Absorption[band];
+                    scattering += shares[i] * pigment.Scattering[band];
                 }
 
                 if (appendBlend)
                 {
-                    double share = blendFraction / total;
-                    absorption += share * palette[blendIndex].Absorption[band];
-                    scattering += share * palette[blendIndex].Scattering[band];
+                    absorption += appendShare * palette[blendIndex].Absorption[band];
+                    scattering += appendShare * palette[blendIndex].Scattering[band];
                 }
 
                 reflectance[band] = Invert(absorption, scattering);

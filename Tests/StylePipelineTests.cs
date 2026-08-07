@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -32,7 +32,7 @@ namespace PaintTranslator.Tests
 
             Assert.Null(StylePipeline.Render(
                 source,
-                ThreePaints(),
+                StyleTestFixtures.ThreePaints(),
                 style,
                 0,
                 values,
@@ -58,7 +58,7 @@ namespace PaintTranslator.Tests
 
             Assert.Null(StylePipeline.Render(
                 source,
-                ThreePaints(),
+                StyleTestFixtures.ThreePaints(),
                 style,
                 0,
                 values,
@@ -95,7 +95,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void RealismMatchesAnIndependentBruteForceOracle()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
             using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
             int mark = RenderContext.DefaultMarkPixels(source.Width, source.Height);
 
@@ -179,7 +179,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void EveryStyleEmitsOnlyMixableColours()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
             using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
 
             foreach (StyleDefinition style in StyleRegistry.All)
@@ -222,7 +222,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void RenderingOneStyleAfterAnotherMatchesRenderingItAlone()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
             using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
 
             StyleDefinition realism = StyleRegistry.ByName("Realism");
@@ -291,7 +291,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void SourceAlphaIsPreservedExactly()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
             using Bitmap source = BuildGradientBitmapWithVaryingAlpha(64, 64);
 
             StyleDefinition realism = StyleRegistry.ByName("Realism");
@@ -319,7 +319,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void PreparedCandidatesRenderIdenticallyToOneShotRendering()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
             StyleDefinition style = StyleRegistry.ByName("Realism");
             IReadOnlyDictionary<IPipelineStage, ParameterValues> values = StylePipeline.DefaultValues(style);
             CandidateSet prepared = StylePipeline.PrepareCandidates(paints, style, values);
@@ -349,16 +349,6 @@ namespace PaintTranslator.Tests
             {
                 cancellation.Cancel();
             }
-        }
-
-        private static IReadOnlyList<PigmentCoefficients> ThreePaints()
-        {
-            return new[]
-            {
-                PigmentLibrary.Selectable[0],   // Titanium White
-                PigmentLibrary.Selectable[6],   // C.P. Cadmium Red Light
-                PigmentLibrary.Selectable[11],  // Ultramarine Blue
-            };
         }
 
         /// <summary>

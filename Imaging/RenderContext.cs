@@ -18,9 +18,6 @@ namespace PaintTranslator.Imaging
     /// </summary>
     public readonly struct RenderContext
     {
-        /// <summary>Number of ten-degree hue sectors used by the candidate gamut.</summary>
-        public const int HueSectorCount = 36;
-
         /// <summary>
         /// How many marks span the short edge of a canvas at the default. A detailed
         /// painting occupies roughly this range; going much finer produces marks no
@@ -52,28 +49,19 @@ namespace PaintTranslator.Imaging
         /// the active style.</param>
         /// <param name="achievableMaxChroma">The largest CIELAB C*ab in the candidate
         /// set for this palette.</param>
-        public RenderContext(int width, int height, double markPixels, double achievableMaxChroma)
-            : this(width, height, markPixels, achievableMaxChroma, UniformChromaCeiling(achievableMaxChroma))
-        {
-        }
-
-        /// <summary>
-        /// Initializes a render context with both the overall and per-hue chroma
-        /// ceilings of the selected candidate set.
-        /// </summary>
+        /// <param name="cancellationToken">The signal that this render has been
+        /// superseded and should stop.</param>
         public RenderContext(
             int width,
             int height,
             double markPixels,
             double achievableMaxChroma,
-            double[] achievableMaxChromaByHue,
             CancellationToken cancellationToken = default)
         {
             Width = width;
             Height = height;
             MarkPixels = markPixels;
             AchievableMaxChroma = achievableMaxChroma;
-            AchievableMaxChromaByHue = achievableMaxChromaByHue ?? UniformChromaCeiling(achievableMaxChroma);
             CancellationToken = cancellationToken;
         }
 
@@ -103,47 +91,11 @@ namespace PaintTranslator.Imaging
         public double AchievableMaxChroma { get; }
 
         /// <summary>
-        /// Gets the largest CIELAB chroma found in each ten-degree hue sector.
-        /// </summary>
-        public double[] AchievableMaxChromaByHue { get; }
-
-        /// <summary>
         /// Gets the signal that an interactive render has been superseded. Stages
         /// poll it at row or region boundaries so abandoned full-size work releases
         /// the render slot promptly.
         /// </summary>
         public CancellationToken CancellationToken { get; }
-
-        /// <summary>
-        /// Gets the candidate-set chroma ceiling for a CIELAB hue.
-        /// </summary>
-        public double AchievableMaxChromaForHue(double a, double b)
-        {
-            if (AchievableMaxChromaByHue == null || AchievableMaxChromaByHue.Length != HueSectorCount)
-            {
-                return AchievableMaxChroma;
-            }
-
-            double angle = Math.Atan2(b, a) * (180.0 / Math.PI);
-            if (angle < 0.0)
-            {
-                angle += 360.0;
-            }
-
-            int sector = Math.Clamp((int)(angle / (360.0 / HueSectorCount)), 0, HueSectorCount - 1);
-            return Math.Max(AchievableMaxChromaByHue[sector], 0.0);
-        }
-
-        private static double[] UniformChromaCeiling(double ceiling)
-        {
-            var result = new double[HueSectorCount];
-            for (int i = 0; i < result.Length; i++)
-            {
-                result[i] = ceiling;
-            }
-
-            return result;
-        }
 
         /// <summary>
         /// Computes the mark size to start an image at, before any user adjustment.

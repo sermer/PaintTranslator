@@ -93,8 +93,10 @@ namespace PaintTranslator.Imaging
                 Parallel.For(
                     0,
                     diameter,
-                    () => new RowScratch(paints.Count),
-                    (y, state, scratch) =>
+                    // One spectrum buffer per worker, so the fill allocates once per
+                    // worker rather than once per pixel.
+                    () => new double[SpectralBands.Count],
+                    (y, state, reflectance) =>
                     {
                         for (int x = 0; x < diameter; x++)
                         {
@@ -113,8 +115,8 @@ namespace PaintTranslator.Imaging
                                 wedge.LowerSurplus,
                                 paints[wedge.UpperPaint],
                                 wedge.UpperSurplus,
-                                scratch.Reflectance);
-                            Color colour = SpectralRenderer.ToDisplayColor(scratch.Reflectance, out _);
+                                reflectance);
+                            Color colour = SpectralRenderer.ToDisplayColor(reflectance, out _);
 
                             // Pixel layout for Format32bppArgb is B, G, R, A in memory.
                             int offset = (y * stride) + (x * 4);
@@ -124,9 +126,9 @@ namespace PaintTranslator.Imaging
                             buffer[offset + 3] = (byte)(alpha * 255.0);
                         }
 
-                        return scratch;
+                        return reflectance;
                     },
-                    scratch => { });
+                    reflectance => { });
 
                 System.Runtime.InteropServices.Marshal.Copy(buffer, 0, data.Scan0, buffer.Length);
             }
@@ -307,25 +309,6 @@ namespace PaintTranslator.Imaging
             {
                 wheel.Save(path, ImageFormat.Png);
             }
-        }
-
-        /// <summary>
-        /// Per-thread working buffers, so the parallel fill allocates once per worker
-        /// rather than once per pixel.
-        /// </summary>
-        private sealed class RowScratch
-        {
-            /// <summary>
-            /// Initializes a new instance of the <see cref="RowScratch"/> class.
-            /// </summary>
-            /// <param name="paintCount">How many paints the wheel is built from.</param>
-            public RowScratch(int paintCount)
-            {
-                Reflectance = new double[SpectralBands.Count];
-            }
-
-            /// <summary>Gets the buffer the kernel writes a spectrum into.</summary>
-            public double[] Reflectance { get; }
         }
     }
 }

@@ -33,7 +33,6 @@ namespace PaintTranslator.Imaging
             A = a;
             B = b;
             MaximumChroma = FindMaximumChroma(a, b);
-            MaximumChromaByHue = FindMaximumChromaByHue(a, b, MaximumChroma);
 
             // The occupied region of CIELAB is far smaller than the space itself —
             // no paint mixture is a saturated cyan — so the grid is fitted to the
@@ -116,9 +115,6 @@ namespace PaintTranslator.Imaging
         /// and full render that reuses it.
         /// </summary>
         public double MaximumChroma { get; }
-
-        /// <summary>Gets the largest CIELAB chroma in each ten-degree hue sector.</summary>
-        public double[] MaximumChromaByHue { get; }
 
         /// <summary>Gets how many cells the grid spans along each axis.</summary>
         public int CellsPerAxis { get; }
@@ -296,60 +292,6 @@ namespace PaintTranslator.Imaging
             }
 
             return Math.Sqrt(largestSquared);
-        }
-
-        private static double[] FindMaximumChromaByHue(double[] a, double[] b, double fallback)
-        {
-            var ceilings = new double[RenderContext.HueSectorCount];
-            var populated = new bool[ceilings.Length];
-            for (int i = 0; i < a.Length; i++)
-            {
-                double chroma = Math.Sqrt((a[i] * a[i]) + (b[i] * b[i]));
-                if (chroma <= 1e-9)
-                {
-                    continue;
-                }
-
-                double angle = Math.Atan2(b[i], a[i]) * (180.0 / Math.PI);
-                if (angle < 0.0)
-                {
-                    angle += 360.0;
-                }
-
-                int sector = Math.Clamp((int)(angle / (360.0 / RenderContext.HueSectorCount)), 0, RenderContext.HueSectorCount - 1);
-                ceilings[sector] = Math.Max(ceilings[sector], chroma);
-                populated[sector] = true;
-            }
-
-            for (int sector = 0; sector < ceilings.Length; sector++)
-            {
-                if (populated[sector])
-                {
-                    continue;
-                }
-
-                int nearest = -1;
-                int distance = int.MaxValue;
-                for (int candidate = 0; candidate < ceilings.Length; candidate++)
-                {
-                    if (!populated[candidate])
-                    {
-                        continue;
-                    }
-
-                    int direct = Math.Abs(candidate - sector);
-                    int circular = Math.Min(direct, ceilings.Length - direct);
-                    if (circular < distance)
-                    {
-                        distance = circular;
-                        nearest = candidate;
-                    }
-                }
-
-                ceilings[sector] = nearest >= 0 ? ceilings[nearest] : fallback;
-            }
-
-            return ceilings;
         }
     }
 }

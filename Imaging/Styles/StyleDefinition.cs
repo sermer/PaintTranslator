@@ -55,6 +55,33 @@ namespace PaintTranslator.Imaging.Styles
         } = new Dictionary<(IPipelineStage, string), double>();
 
         /// <summary>
+        /// Gets every stage this style names, in the order
+        /// <see cref="StylePipeline.Render"/> runs them: pre-map stages, the remap,
+        /// the candidate transform, the quantiser, then post-map stages. The record
+        /// owns this enumeration so slot-order knowledge lives in one place instead
+        /// of being restated by every consumer that walks the stages.
+        /// </summary>
+        public IEnumerable<IPipelineStage> Stages
+        {
+            get
+            {
+                foreach (IPreMapStage stage in PreMap)
+                {
+                    yield return stage;
+                }
+
+                yield return Remap;
+                yield return Candidates;
+                yield return Quantiser;
+
+                foreach (IPostMapStage stage in PostMap)
+                {
+                    yield return stage;
+                }
+            }
+        }
+
+        /// <summary>
         /// Returns a copy of this style with additional stage-parameter defaults
         /// recorded in <see cref="DefaultOverrides"/>.
         /// </summary>

@@ -62,7 +62,7 @@ namespace PaintTranslator.Tests
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
             var context = new RenderContext(
-                width, height, 2.0, 50.0, null, cancellation.Token);
+                width, height, 2.0, 50.0, cancellation.Token);
 
             stage.Refine(indices, width, width, height, candidates, in context, values);
 

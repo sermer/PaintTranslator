@@ -115,11 +115,6 @@ namespace PaintTranslator.Imaging
 
             diagnostics?.End(preparedCandidates == null ? "Candidates: build" : "Candidates: reuse", phaseStarted);
 
-            phaseStarted = diagnostics?.Begin() ?? 0L;
-            double achievableMaxChroma = candidates.MaximumChroma;
-            double[] achievableMaxChromaByHue = candidates.MaximumChromaByHue;
-            diagnostics?.End("Candidates: metadata", phaseStarted);
-
             int width = source.Width;
             int height = source.Height;
 
@@ -131,8 +126,7 @@ namespace PaintTranslator.Imaging
                 width,
                 height,
                 baseMark * style.MarkScale,
-                achievableMaxChroma,
-                achievableMaxChromaByHue,
+                candidates.MaximumChroma,
                 cancellationToken);
 
             Bitmap result = null;
@@ -141,6 +135,7 @@ namespace PaintTranslator.Imaging
             int strideInts = width;
             diagnostics?.End("Source: copy pixels", phaseStarted);
 
+            int[] indices = null;
             try
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -174,18 +169,21 @@ namespace PaintTranslator.Imaging
                     }
 
                     phaseStarted = diagnostics?.Begin() ?? 0L;
-                    achievableMaxChroma = candidates.MaximumChroma;
                     context = new RenderContext(
                         width,
                         height,
                         baseMark * style.MarkScale,
-                        achievableMaxChroma,
-                        candidates.MaximumChromaByHue,
+                        candidates.MaximumChroma,
                         cancellationToken);
                     diagnostics?.End("Candidates: image metadata", phaseStarted);
                 }
 
-                var indices = new int[strideInts * height];
+                // Rented rather than allocated: a full-size render needs a multi-MB
+                // plane here on every debounced slider tick, and fresh large-object
+                // allocations per render turn interactive tuning into GC pauses. The
+                // mapping passes below write every pixel the later stages read, so
+                // the rented plane needs no clearing.
+                indices = ImageBufferPool.Int.Rent(strideInts * height);
                 phaseStarted = diagnostics?.Begin() ?? 0L;
                 if (style.Quantiser.IsPositionDependent)
                 {
@@ -246,6 +244,13 @@ namespace PaintTranslator.Imaging
                 result?.Dispose();
                 throw;
             }
+            finally
+            {
+                if (indices != null)
+                {
+                    ImageBufferPool.Int.Return(indices);
+                }
+            }
 
             return result;
         }
@@ -305,16 +310,7 @@ namespace PaintTranslator.Imaging
         internal static IReadOnlyDictionary<IPipelineStage, ParameterValues> DefaultValues(StyleDefinition style)
         {
             var values = new Dictionary<IPipelineStage, ParameterValues>();
-            foreach (IPreMapStage stage in style.PreMap)
-            {
-                values[stage] = new ParameterValues(stage.Parameters);
-            }
-
-            values[style.Remap] = new ParameterValues(style.Remap.Parameters);
-            values[style.Candidates] = new ParameterValues(style.Candidates.Parameters);
-            values[style.Quantiser] = new ParameterValues(style.Quantiser.Parameters);
-
-            foreach (IPostMapStage stage in style.PostMap)
+            foreach (IPipelineStage stage in style.Stages)
             {
                 values[stage] = new ParameterValues(stage.Parameters);
             }
@@ -350,16 +346,7 @@ namespace PaintTranslator.Imaging
             }
 
             var snapshot = new Dictionary<IPipelineStage, ParameterValues>();
-            foreach (IPreMapStage stage in style.PreMap)
-            {
-                snapshot[stage] = values[stage].Snapshot();
-            }
-
-            snapshot[style.Remap] = values[style.Remap].Snapshot();
-            snapshot[style.Candidates] = values[style.Candidates].Snapshot();
-            snapshot[style.Quantiser] = values[style.Quantiser].Snapshot();
-
-            foreach (IPostMapStage stage in style.PostMap)
+            foreach (IPipelineStage stage in style.Stages)
             {
                 snapshot[stage] = values[stage].Snapshot();
             }
@@ -520,103 +507,5 @@ namespace PaintTranslator.Imaging
             });
         }
 
-        /// <summary>
-        /// Finds the largest chroma present in a candidate set.
-        /// </summary>
-        /// <param name="candidates">The achievable-gamut colours to scan.</param>
-        /// <returns>The largest CIELAB C*ab among <paramref name="candidates"/>, or
-        /// zero when it is empty.</returns>
-        private static double MaximumChroma(
-            CandidateSet candidates,
-            CancellationToken cancellationToken = default)
-        {
-            double largest = 0.0;
-            for (int i = 0; i < candidates.Argb.Length; i++)
-            {
-                if ((i & 4095) == 0)
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        return largest;
-                    }
-                }
-
-                double chroma = Math.Sqrt((candidates.A[i] * candidates.A[i]) + (candidates.B[i] * candidates.B[i]));
-                largest = Math.Max(largest, chroma);
-            }
-
-            return largest;
-        }
-
-        /// <summary>
-        /// Finds the largest achievable chroma in each ten-degree hue sector. Empty
-        /// sectors inherit the nearest populated sector so a sparse candidate set
-        /// never makes the remap divide by a zero ceiling for an otherwise chromatic
-        /// source colour.
-        /// </summary>
-        private static double[] MaximumChromaByHue(
-            CandidateSet candidates,
-            double fallback,
-            CancellationToken cancellationToken = default)
-        {
-            var ceilings = new double[RenderContext.HueSectorCount];
-            var populated = new bool[ceilings.Length];
-            for (int i = 0; i < candidates.Argb.Length; i++)
-            {
-                if ((i & 4095) == 0)
-                {
-                    if (cancellationToken.IsCancellationRequested)
-                    {
-                        return ceilings;
-                    }
-                }
-
-                double chroma = Math.Sqrt((candidates.A[i] * candidates.A[i]) + (candidates.B[i] * candidates.B[i]));
-                if (chroma <= 1e-9)
-                {
-                    continue;
-                }
-
-                double angle = Math.Atan2(candidates.B[i], candidates.A[i]) * (180.0 / Math.PI);
-                if (angle < 0.0)
-                {
-                    angle += 360.0;
-                }
-
-                int sector = Math.Clamp((int)(angle / (360.0 / RenderContext.HueSectorCount)), 0, RenderContext.HueSectorCount - 1);
-                ceilings[sector] = Math.Max(ceilings[sector], chroma);
-                populated[sector] = true;
-            }
-
-            for (int sector = 0; sector < ceilings.Length; sector++)
-            {
-                if (populated[sector])
-                {
-                    continue;
-                }
-
-                int nearest = -1;
-                int distance = int.MaxValue;
-                for (int candidate = 0; candidate < ceilings.Length; candidate++)
-                {
-                    if (!populated[candidate])
-                    {
-                        continue;
-                    }
-
-                    int direct = Math.Abs(candidate - sector);
-                    int circular = Math.Min(direct, ceilings.Length - direct);
-                    if (circular < distance)
-                    {
-                        distance = circular;
-                        nearest = candidate;
-                    }
-                }
-
-                ceilings[sector] = nearest >= 0 ? ceilings[nearest] : fallback;
-            }
-
-            return ceilings;
-        }
     }
 }

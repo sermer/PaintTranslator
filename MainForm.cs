@@ -551,7 +551,7 @@ namespace PaintTranslator
                     stageHeadingFont = new Font(Font, FontStyle.Bold);
                 }
 
-                foreach (IPipelineStage stage in EnumerateStages(style))
+                foreach (IPipelineStage stage in style.Stages)
                 {
                     if (stage.Parameters.Count == 0)
                     {
@@ -672,31 +672,6 @@ namespace PaintTranslator
             finally
             {
                 stylePanel.ResumeLayout();
-            }
-        }
-
-        /// <summary>
-        /// Lists a style's stages in the order <see cref="StylePipeline.Render"/>
-        /// runs them, which is also the order their controls should appear in the
-        /// panel: pre-map stages, the remap, the candidate transform, the quantiser,
-        /// then post-map stages.
-        /// </summary>
-        /// <param name="style">The style to enumerate.</param>
-        /// <returns>Every stage <paramref name="style"/> names, in pipeline order.</returns>
-        private static IEnumerable<IPipelineStage> EnumerateStages(StyleDefinition style)
-        {
-            foreach (IPreMapStage stage in style.PreMap)
-            {
-                yield return stage;
-            }
-
-            yield return style.Remap;
-            yield return style.Candidates;
-            yield return style.Quantiser;
-
-            foreach (IPostMapStage stage in style.PostMap)
-            {
-                yield return stage;
             }
         }
 
@@ -895,17 +870,7 @@ namespace PaintTranslator
                 }
 
                 PopulatePaintList(new HashSet<string>(chosen, StringComparer.Ordinal));
-
-                // Only the measured-paint wheel depends on this palette. A
-                // traditional wheel remains unchanged when paint selection changes.
-                if (displayedWheel == ColorWheelDisplay.SelectedPaints)
-                {
-                    SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
-                }
-                else if (!IsWheelDisplayed)
-                {
-                    SchedulePreview();
-                }
+                OnPaintSelectionChanged();
             }
         }
 
@@ -1251,10 +1216,6 @@ namespace PaintTranslator
                 return;
             }
 
-            // The check change alters which paints can mix, so the hover matcher
-            // must be rebuilt from the new selection on next use.
-            blendMatcher = null;
-
             List<PigmentCoefficients> selected = GetSelectedPaints(e);
 
             // Mirror the list state onto the select-all checkbox without letting
@@ -1269,16 +1230,7 @@ namespace PaintTranslator
                 suppressPaintCheckEvents = false;
             }
 
-            // Only the selected-paint wheel changes with this list. The
-            // traditional wheel is palette-independent and stays on screen.
-            if (displayedWheel == ColorWheelDisplay.SelectedPaints)
-            {
-                SetDisplayedImage(ColorWheelGenerator.Create(512, selected));
-            }
-            else if (!IsWheelDisplayed)
-            {
-                SchedulePreview();
-            }
+            OnPaintSelectionChanged(selected);
         }
 
         /// <summary>
@@ -1295,10 +1247,6 @@ namespace PaintTranslator
                 return;
             }
 
-            // Bulk check changes alter which paints can mix, so the hover matcher
-            // must be rebuilt from the new selection on next use.
-            blendMatcher = null;
-
             suppressPaintCheckEvents = true;
             try
             {
@@ -1312,11 +1260,25 @@ namespace PaintTranslator
                 suppressPaintCheckEvents = false;
             }
 
-            // One regeneration for the measured-paint wheel. The traditional
-            // wheel does not depend on the checked paints.
+            OnPaintSelectionChanged();
+        }
+
+        /// <summary>
+        /// Reacts to a change in which paints are selected: the achievable gamut has
+        /// moved, so the cached hover matcher no longer applies, the selected-paint
+        /// wheel must be regenerated if it is showing, and otherwise a converted
+        /// image needs a fresh preview. The traditional wheel is palette-independent
+        /// and stays on screen untouched.
+        /// </summary>
+        /// <param name="selected">The paints now selected, or null to read them from
+        /// the list's current checked states.</param>
+        private void OnPaintSelectionChanged(List<PigmentCoefficients> selected = null)
+        {
+            blendMatcher = null;
+
             if (displayedWheel == ColorWheelDisplay.SelectedPaints)
             {
-                SetDisplayedImage(ColorWheelGenerator.Create(512, GetSelectedPaints(null)));
+                SetDisplayedImage(ColorWheelGenerator.Create(512, selected ?? GetSelectedPaints(null)));
             }
             else if (!IsWheelDisplayed)
             {
@@ -1536,7 +1498,7 @@ namespace PaintTranslator
         {
             List<PigmentCoefficients> paints = GetSelectedPaints(null);
             double[] weights = ColorWheelGenerator.GetBlendWeights(wheelDiameter, paints.Count, pixelX, pixelY);
-            return weights == null ? null : ComposeBlendLines(pixel, paints, weights, null);
+            return weights == null ? null : ComposeBlendLines(pixel, paints, weights);
         }
 
         /// <summary>
@@ -1652,10 +1614,10 @@ namespace PaintTranslator
         }
 
         /// <summary>
-        /// Composes the tooltip text for a color wheel pixel: the pixel's RGB line, an
-        /// optional header, and the blend's paints with their percentage shares, largest
-        /// first. Only the top five paints get their own line; smaller contributors are
-        /// rolled into a single "+N more" line so wheels built from many paints stay
+        /// Composes the tooltip text for a color wheel pixel: the pixel's RGB line
+        /// and the blend's paints with their percentage shares, largest first. Only
+        /// the top five paints get their own line; smaller contributors are rolled
+        /// into a single "+N more" line so wheels built from many paints stay
         /// readable.
         /// <para>
         /// Percentages are right here and wrong for a recipe. A wheel pixel is a point in
@@ -1667,10 +1629,8 @@ namespace PaintTranslator
         /// <param name="pixel">The hovered pixel color.</param>
         /// <param name="paints">The paints the weights refer to, index-aligned.</param>
         /// <param name="weights">Each paint's share of the blend, summing to 1.</param>
-        /// <param name="header">A line inserted between the RGB line and the paint
-        /// lines, or null for none.</param>
         /// <returns>The tooltip lines.</returns>
-        private static string[] ComposeBlendLines(Color pixel, List<PigmentCoefficients> paints, double[] weights, string header)
+        private static string[] ComposeBlendLines(Color pixel, List<PigmentCoefficients> paints, double[] weights)
         {
             const int MaxNamedPaints = 5;
 
@@ -1686,11 +1646,6 @@ namespace PaintTranslator
             order.Sort((first, second) => weights[second].CompareTo(weights[first]));
 
             var lines = new List<string> { FormatRgbLine(pixel) };
-            if (header != null)
-            {
-                lines.Add(header);
-            }
-
             int named = 0;
             int others = 0;
             double othersShare = 0.0;

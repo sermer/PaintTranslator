@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
 using PaintTranslator.Imaging;
-using PaintTranslator.Pigments;
 using Xunit;
 
 namespace PaintTranslator.Tests
@@ -27,8 +24,8 @@ namespace PaintTranslator.Tests
         [Fact]
         public void ANoiselessSourceStaysPaintable()
         {
-            using Bitmap source = BuildGradient(256, 256, 0.0);
-            using Bitmap converted = PalettePhotoConverter.Convert(source, SixPaints(), 0);
+            using Bitmap source = StyleTestFixtures.BuildNoisyGradient(256, 256, 0.0);
+            using Bitmap converted = PalettePhotoConverter.Convert(source, StyleTestFixtures.SixPaints(), 0);
 
             Assert.True(FractionInSmallRegions(converted, 256) < 0.02);
         }
@@ -54,8 +51,8 @@ namespace PaintTranslator.Tests
         [Fact]
         public void ANoiselessSourceKeepsPlentyOfStructure()
         {
-            using Bitmap source = BuildGradient(256, 256, 0.0);
-            using Bitmap converted = PalettePhotoConverter.Convert(source, SixPaints(), 0);
+            using Bitmap source = StyleTestFixtures.BuildNoisyGradient(256, 256, 0.0);
+            using Bitmap converted = PalettePhotoConverter.Convert(source, StyleTestFixtures.SixPaints(), 0);
 
             int regions = CountRegions(converted);
             int distinctColours = CountDistinctColours(converted);
@@ -75,8 +72,8 @@ namespace PaintTranslator.Tests
         [Fact]
         public void ANoisySourceIsPaintableOnceTheFloorIsApplied()
         {
-            using Bitmap source = BuildGradient(256, 256, 3.0);
-            using Bitmap converted = PalettePhotoConverter.Convert(source, SixPaints(), 0);
+            using Bitmap source = StyleTestFixtures.BuildNoisyGradient(256, 256, 3.0);
+            using Bitmap converted = PalettePhotoConverter.Convert(source, StyleTestFixtures.SixPaints(), 0);
 
             double fragmented = FractionInSmallRegions(converted, 256);
 
@@ -90,9 +87,9 @@ namespace PaintTranslator.Tests
         [Fact]
         public void ALargerMarkProducesFewerRegions()
         {
-            using Bitmap source = BuildGradient(256, 256, 3.0);
-            using Bitmap fine = PalettePhotoConverter.Convert(source, SixPaints(), 0, 2);
-            using Bitmap coarse = PalettePhotoConverter.Convert(source, SixPaints(), 0, 12);
+            using Bitmap source = StyleTestFixtures.BuildNoisyGradient(256, 256, 3.0);
+            using Bitmap fine = PalettePhotoConverter.Convert(source, StyleTestFixtures.SixPaints(), 0, 2);
+            using Bitmap coarse = PalettePhotoConverter.Convert(source, StyleTestFixtures.SixPaints(), 0, 12);
 
             Assert.True(
                 CountRegions(coarse) < CountRegions(fine),
@@ -111,69 +108,9 @@ namespace PaintTranslator.Tests
             Assert.True(PalettePhotoConverter.FloorRadius(20.0) > PalettePhotoConverter.FloorRadius(4.0));
         }
 
-        private static IReadOnlyList<PigmentCoefficients> SixPaints()
-        {
-            return new[]
-            {
-                PigmentLibrary.Selectable[0],   // Titanium White
-                PigmentLibrary.Selectable[2],   // Hansa Yellow Opaque
-                PigmentLibrary.Selectable[6],   // C.P. Cadmium Red Light
-                PigmentLibrary.Selectable[9],   // Quinacridone Magenta
-                PigmentLibrary.Selectable[11],  // Ultramarine Blue
-                PigmentLibrary.Selectable[18],  // Bone Black
-            };
-        }
-
-        /// <summary>
-        /// A smooth bilinear field between four plausible photographic colours, with
-        /// optional Gaussian noise. Neighbouring pixels differ by well under one 8-bit
-        /// code before the noise is added, so anything fragmented in the output came
-        /// from the conversion rather than the source.
-        /// </summary>
-        private static Bitmap BuildGradient(int width, int height, double sigma)
-        {
-            var corners = new[]
-            {
-                new[] { 28.0, 38.0, 92.0 },
-                new[] { 232.0, 214.0, 168.0 },
-                new[] { 176.0, 62.0, 48.0 },
-                new[] { 244.0, 242.0, 238.0 },
-            };
-
-            var rng = new Random(7);
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            for (int y = 0; y < height; y++)
-            {
-                double fy = y / (double)(height - 1);
-                for (int x = 0; x < width; x++)
-                {
-                    double fx = x / (double)(width - 1);
-                    var channel = new int[3];
-                    for (int c = 0; c < 3; c++)
-                    {
-                        double top = (corners[0][c] * (1 - fx)) + (corners[1][c] * fx);
-                        double bottom = (corners[2][c] * (1 - fx)) + (corners[3][c] * fx);
-                        double value = (top * (1 - fy)) + (bottom * fy);
-                        if (sigma > 0.0)
-                        {
-                            double u1 = 1.0 - rng.NextDouble();
-                            double u2 = rng.NextDouble();
-                            value += sigma * Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2);
-                        }
-
-                        channel[c] = Math.Clamp((int)Math.Round(value), 0, 255);
-                    }
-
-                    bitmap.SetPixel(x, y, Color.FromArgb(255, channel[0], channel[1], channel[2]));
-                }
-            }
-
-            return bitmap;
-        }
-
         private static double FractionInSmallRegions(Bitmap bitmap, int markSquared)
         {
-            int[] pixels = ReadPixels(bitmap, out int stride);
+            int[] pixels = StyleTestFixtures.ReadPixels(bitmap, out int stride);
 
             return PaintabilityMetrics.FractionInRegionsSmallerThan(
                 pixels, stride, bitmap.Width, bitmap.Height,
@@ -183,7 +120,7 @@ namespace PaintTranslator.Tests
 
         private static int CountRegions(Bitmap bitmap)
         {
-            int[] pixels = ReadPixels(bitmap, out int stride);
+            int[] pixels = StyleTestFixtures.ReadPixels(bitmap, out int stride);
 
             return PaintabilityMetrics.CountRegions(pixels, stride, bitmap.Width, bitmap.Height);
         }
@@ -196,7 +133,7 @@ namespace PaintTranslator.Tests
         /// </summary>
         private static int CountDistinctColours(Bitmap bitmap)
         {
-            int[] pixels = ReadPixels(bitmap, out int stride);
+            int[] pixels = StyleTestFixtures.ReadPixels(bitmap, out int stride);
             var seen = new HashSet<int>();
             for (int y = 0; y < bitmap.Height; y++)
             {
@@ -208,26 +145,6 @@ namespace PaintTranslator.Tests
             }
 
             return seen.Count;
-        }
-
-        private static int[] ReadPixels(Bitmap bitmap, out int strideInts)
-        {
-            BitmapData data = bitmap.LockBits(
-                new Rectangle(0, 0, bitmap.Width, bitmap.Height),
-                ImageLockMode.ReadOnly,
-                PixelFormat.Format32bppArgb);
-            try
-            {
-                strideInts = data.Stride / 4;
-                var pixels = new int[strideInts * bitmap.Height];
-                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-
-                return pixels;
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
-            }
         }
     }
 }

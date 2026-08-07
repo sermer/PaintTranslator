@@ -14,10 +14,13 @@ namespace PaintTranslator.Imaging.Styles.Stages
         private static readonly StyleParameter MotherFractionParameter =
             new StyleParameter("motherFraction", "Mother colour", 0.0, 0.6, 0.15, "");
 
+        private static readonly StyleParameter ColourCountParameter =
+            new StyleParameter("colourCount", "Palette colours", 3.0, 12.0, 8.0, "");
+
         private static readonly IReadOnlyList<StyleParameter> ParameterList = new[]
         {
             MotherFractionParameter,
-            new StyleParameter("colourCount", "Palette colours", 3.0, 12.0, 8.0, ""),
+            ColourCountParameter,
         };
 
         public string DisplayName => "Palette";
@@ -45,7 +48,12 @@ namespace PaintTranslator.Imaging.Styles.Stages
             in RenderContext context,
             ParameterValues values)
         {
-            int requested = Math.Clamp((int)Math.Round(values["colourCount"]), 3, 12);
+            // Clamped to the declaration's own range so widening the slider can
+            // never silently disagree with the reduction actually performed.
+            int requested = Math.Clamp(
+                (int)Math.Round(values["colourCount"]),
+                (int)ColourCountParameter.Minimum,
+                (int)ColourCountParameter.Maximum);
             if (candidates.Argb.Length <= requested)
             {
                 return candidates;

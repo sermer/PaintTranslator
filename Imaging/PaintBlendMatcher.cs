@@ -40,14 +40,21 @@ namespace PaintTranslator.Imaging
         // dropped from the recipe and its share spread across the ones that remain.
         private const double MinimumShare = 0.005;
 
+        // The most entries the query cache holds before it is reset. A converted
+        // image contains at most a few hundred distinct candidate colours, so the
+        // cap is only ever reached by hovering across an unconverted photo, where
+        // the entries are unlikely to recur anyway.
+        private const int MaximumCachedMatches = 4096;
+
         // The paints this matcher mixes from, in the caller's order; BlendMatch reports
         // indices into this list.
         private readonly IReadOnlyList<PigmentCoefficients> paints;
 
-        // The most recent query and its result: a hovering cursor samples the
-        // same color many times in a row, so one cached entry skips most scans.
-        private int lastTargetArgb;
-        private BlendMatch lastMatch;
+        // Every query answered so far, keyed by exact ARGB. A cursor sweeping a
+        // converted image revisits the same few hundred candidate colours over and
+        // over, so remembering all of them keeps the tooltip from re-running the
+        // full subset search on nearly every mouse move.
+        private readonly Dictionary<int, BlendMatch> matchesByArgb = new Dictionary<int, BlendMatch>();
 
         /// <summary>
         /// Describes the achievable mixture closest to a queried color: the
@@ -249,9 +256,9 @@ namespace PaintTranslator.Imaging
         public BlendMatch FindClosestBlend(Color target)
         {
             int targetArgb = target.ToArgb();
-            if (lastMatch != null && targetArgb == lastTargetArgb)
+            if (matchesByArgb.TryGetValue(targetArgb, out BlendMatch cached))
             {
-                return lastMatch;
+                return cached;
             }
 
             PalettePhotoConverter.RgbToLab(target.R, target.G, target.B,
@@ -292,9 +299,18 @@ namespace PaintTranslator.Imaging
                     }
                 });
 
-            lastTargetArgb = targetArgb;
-            lastMatch = winner.ToMatch();
-            return lastMatch;
+            BlendMatch match = winner.ToMatch();
+
+            // A hard reset rather than an eviction policy: the cap exists only to
+            // bound memory during an unusually long hover session, and the search
+            // repopulates hot entries in a few mouse moves.
+            if (matchesByArgb.Count >= MaximumCachedMatches)
+            {
+                matchesByArgb.Clear();
+            }
+
+            matchesByArgb[targetArgb] = match;
+            return match;
         }
 
         /// <summary>

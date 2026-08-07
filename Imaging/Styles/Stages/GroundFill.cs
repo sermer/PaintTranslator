@@ -23,105 +23,80 @@ namespace PaintTranslator.Imaging.Styles.Stages
             in RenderContext context,
             ParameterValues values)
         {
-            int minimumArea = Math.Max(1, (int)Math.Ceiling(context.MarkPixels * context.MarkPixels * 4.0));
-            var labels = new int[strideInts * height];
-            Array.Fill(labels, -1);
-            var regions = new List<Region>();
-            var queue = new Queue<int>();
-
-            for (int y = 0; y < height; y++)
+            int[] labels = ImageBufferPool.Int.Rent(strideInts * height);
+            try
             {
-                if (context.CancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-                for (int x = 0; x < width; x++)
-                {
-                    int at = (y * strideInts) + x;
-                    if (labels[at] >= 0)
-                    {
-                        continue;
-                    }
+                Array.Fill(labels, -1, 0, strideInts * height);
+                Refine(indices, labels, strideInts, width, height, candidates, in context);
+            }
+            finally
+            {
+                ImageBufferPool.Int.Return(labels);
+            }
+        }
 
-                    int label = regions.Count;
-                    int value = indices[at];
-                    int area = 0;
-                    queue.Enqueue(at);
-                    labels[at] = label;
-                    double sumL = 0.0;
-                    double sumA = 0.0;
-                    double sumB = 0.0;
-                    bool touchesBorder = false;
+        /// <summary>
+        /// Finds the dominant border-connected region over a prepared label plane
+        /// and rewrites it to a quieter candidate.
+        /// </summary>
+        private static void Refine(
+            int[] indices, int[] labels, int strideInts, int width, int height,
+            CandidateSet candidates, in RenderContext context)
+        {
+            int minimumArea = Math.Max(1, (int)Math.Ceiling(context.MarkPixels * context.MarkPixels * 4.0));
+            var valuesByRegion = new List<int>();
+            var areas = new List<int>();
 
-                    while (queue.Count > 0)
-                    {
-                        if ((area & 4095) == 0)
-                        {
-                            if (context.CancellationToken.IsCancellationRequested)
-                            {
-                                return;
-                            }
-                        }
+            RegionLabeler.Label(
+                indices, labels, strideInts, width, height,
+                valuesByRegion, areas, context.CancellationToken);
 
-                        int current = queue.Dequeue();
-                        int currentY = current / strideInts;
-                        int currentX = current - (currentY * strideInts);
-                        area++;
-                        sumL += candidates.L[value];
-                        sumA += candidates.A[value];
-                        sumB += candidates.B[value];
-                        touchesBorder |= currentX == 0 || currentY == 0 || currentX == width - 1 || currentY == height - 1;
-
-                        if (currentX > 0)
-                        {
-                            TryEnqueue(current - 1, value, label, indices, labels, queue);
-                        }
-                        if (currentX + 1 < width)
-                        {
-                            TryEnqueue(current + 1, value, label, indices, labels, queue);
-                        }
-                        if (currentY > 0)
-                        {
-                            TryEnqueue(current - strideInts, value, label, indices, labels, queue);
-                        }
-                        if (currentY + 1 < height)
-                        {
-                            TryEnqueue(current + strideInts, value, label, indices, labels, queue);
-                        }
-                    }
-
-                    regions.Add(new Region(
-                        label, value, area, sumL / area, sumA / area, sumB / area, touchesBorder));
-                }
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                return;
             }
 
-            Region field = null;
-            foreach (Region region in regions)
+            // A region touches the border exactly when one of its pixels lies on
+            // it, so walking the four edges once marks every such region.
+            var touchesBorder = new bool[valuesByRegion.Count];
+            for (int x = 0; x < width; x++)
             {
-                if (context.CancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-                if (!region.TouchesBorder || region.Area < minimumArea)
+                touchesBorder[labels[x]] = true;
+                touchesBorder[labels[((height - 1) * strideInts) + x]] = true;
+            }
+            for (int y = 0; y < height; y++)
+            {
+                touchesBorder[labels[y * strideInts]] = true;
+                touchesBorder[labels[(y * strideInts) + width - 1]] = true;
+            }
+
+            int field = -1;
+            for (int region = 0; region < areas.Count; region++)
+            {
+                if (!touchesBorder[region] || areas[region] < minimumArea)
                 {
                     continue;
                 }
 
-                if (field == null || region.Area > field.Area)
+                if (field < 0 || areas[region] > areas[field])
                 {
                     field = region;
                 }
             }
 
-            if (field == null)
+            if (field < 0)
             {
                 return;
             }
 
-            double chroma = Math.Sqrt((field.A * field.A) + (field.B * field.B));
+            // Every pixel of a region holds the same candidate, so the region's
+            // colour is that candidate's own Lab coordinates.
+            double fieldA = candidates.A[valuesByRegion[field]];
+            double fieldB = candidates.B[valuesByRegion[field]];
+            double chroma = Math.Sqrt((fieldA * fieldA) + (fieldB * fieldB));
             double targetChroma = Math.Min(chroma * 0.35, 25.0);
             double scale = chroma <= 1e-9 ? 0.0 : targetChroma / chroma;
-            int replacement = candidates.FindNearest(58.0, field.A * scale, field.B * scale);
+            int replacement = candidates.FindNearest(58.0, fieldA * scale, fieldB * scale);
             for (int y = 0; y < height; y++)
             {
                 if (context.CancellationToken.IsCancellationRequested)
@@ -132,45 +107,12 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 for (int x = 0; x < width; x++)
                 {
                     int at = row + x;
-                    if (labels[at] == field.Label)
+                    if (labels[at] == field)
                     {
                         indices[at] = replacement;
                     }
                 }
             }
-        }
-
-        private static void TryEnqueue(
-            int at, int value, int label, int[] indices, int[] labels, Queue<int> queue)
-        {
-            if (labels[at] < 0 && indices[at] == value)
-            {
-                labels[at] = label;
-                queue.Enqueue(at);
-            }
-        }
-
-        private sealed class Region
-        {
-            public Region(
-                int label, int value, int area, double l, double a, double b, bool touchesBorder)
-            {
-                Label = label;
-                Value = value;
-                Area = area;
-                L = l;
-                A = a;
-                B = b;
-                TouchesBorder = touchesBorder;
-            }
-
-            public int Label { get; }
-            public int Value { get; }
-            public int Area { get; }
-            public double L { get; }
-            public double A { get; }
-            public double B { get; }
-            public bool TouchesBorder { get; }
         }
     }
 }

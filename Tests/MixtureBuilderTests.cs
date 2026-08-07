@@ -1,5 +1,4 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Threading;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
@@ -22,13 +21,13 @@ namespace PaintTranslator.Tests
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
 
-            Assert.Null(new MixtureBuilder(ThreePaints()).Build(cancellation.Token));
+            Assert.Null(new MixtureBuilder(StyleTestFixtures.ThreePaints()).Build(cancellation.Token));
         }
 
         [Fact]
         public void AnUntouchedBuilderMatchesTheConverterSOwnSampling()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
 
             CandidateSet built = new MixtureBuilder(paints).Build();
             int[] direct = PalettePhotoConverter.SampleAchievableColors(paints);
@@ -44,14 +43,14 @@ namespace PaintTranslator.Tests
         [Fact]
         public void BlendingInAMotherColourContractsTheGamut()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
 
             var builder = new MixtureBuilder(paints);
             builder.BlendInto(builder.MostNeutralPaintIndex(), 0.35);
             CandidateSet contracted = builder.Build();
 
             Assert.True(
-                MaximumChroma(contracted) < MaximumChroma(new MixtureBuilder(paints).Build()),
+                contracted.MaximumChroma < new MixtureBuilder(paints).Build().MaximumChroma,
                 "the mother colour did not reduce the reachable chroma");
         }
 
@@ -62,7 +61,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void BlendingZeroChangesNothing()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
 
             var builder = new MixtureBuilder(paints);
             builder.BlendInto(0, 0.0);
@@ -75,7 +74,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void KeepOnlyRemovesMixturesFailingThePredicate()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
 
             var builder = new MixtureBuilder(paints);
             builder.KeepOnly((l, a, b) => l >= 50.0);
@@ -96,7 +95,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void APredicateRejectingEverythingFallsBackToTheFullSet()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
 
             var builder = new MixtureBuilder(paints);
             builder.KeepOnly((l, a, b) => false);
@@ -174,7 +173,7 @@ namespace PaintTranslator.Tests
         [Fact]
         public void TripleSamplingAddsSubstantiallyMoreThanTheEdgesAlone()
         {
-            IReadOnlyList<PigmentCoefficients> paints = ThreePaints();
+            IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
 
             int full = PalettePhotoConverter.SampleAchievableColors(paints).Length;
 
@@ -215,25 +214,5 @@ namespace PaintTranslator.Tests
             Assert.False(MixtureBuilder.IsMoreNeutral(chroma: 12.0, lightnessGap: 3.0, bestChroma: 12.0, bestLightnessGap: 3.0));
         }
 
-        private static IReadOnlyList<PigmentCoefficients> ThreePaints()
-        {
-            return new[]
-            {
-                PigmentLibrary.Selectable[0],
-                PigmentLibrary.Selectable[6],
-                PigmentLibrary.Selectable[11],
-            };
-        }
-
-        private static double MaximumChroma(CandidateSet set)
-        {
-            double largest = 0.0;
-            for (int i = 0; i < set.Argb.Length; i++)
-            {
-                largest = Math.Max(largest, Math.Sqrt((set.A[i] * set.A[i]) + (set.B[i] * set.B[i])));
-            }
-
-            return largest;
-        }
     }
 }

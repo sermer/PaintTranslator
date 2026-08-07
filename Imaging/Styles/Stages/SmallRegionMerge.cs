@@ -31,12 +31,31 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 return;
             }
 
-            var labels = new int[strideInts * height];
-            Array.Fill(labels, -1);
+            int[] labels = ImageBufferPool.Int.Rent(strideInts * height);
+            try
+            {
+                Array.Fill(labels, -1, 0, strideInts * height);
+                Refine(indices, labels, strideInts, width, height, minimumArea, in context);
+            }
+            finally
+            {
+                ImageBufferPool.Int.Return(labels);
+            }
+        }
+
+        /// <summary>
+        /// Runs the merge over a prepared label plane: labels the regions, unions
+        /// the small ones into neighbours, and rewrites the index buffer from the
+        /// surviving roots.
+        /// </summary>
+        private static void Refine(
+            int[] indices, int[] labels, int strideInts, int width, int height,
+            int minimumArea, in RenderContext context)
+        {
             var valuesByRegion = new List<int>();
             var areas = new List<int>();
 
-            LabelRegions(
+            RegionLabeler.Label(
                 indices,
                 labels,
                 strideInts,
@@ -123,73 +142,6 @@ namespace PaintTranslator.Imaging.Styles.Stages
                 {
                     int at = row + x;
                     indices[at] = valuesByRegion[Find(parent, labels[at])];
-                }
-            }
-        }
-
-        private static void LabelRegions(
-            int[] indices,
-            int[] labels,
-            int strideInts,
-            int width,
-            int height,
-            List<int> values,
-            List<int> areas,
-            CancellationToken cancellationToken)
-        {
-            var queue = new Queue<int>();
-            for (int y = 0; y < height; y++)
-            {
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    return;
-                }
-
-                for (int x = 0; x < width; x++)
-                {
-                    int at = y * strideInts + x;
-                    if (labels[at] >= 0)
-                    {
-                        continue;
-                    }
-
-                    int region = values.Count;
-                    int value = indices[at];
-                    int area = 0;
-                    queue.Enqueue(at);
-                    labels[at] = region;
-
-                    while (queue.Count > 0)
-                    {
-                        if ((area & 4095) == 0 && cancellationToken.IsCancellationRequested)
-                        {
-                            return;
-                        }
-
-                        int current = queue.Dequeue();
-                        int currentY = current / strideInts;
-                        int currentX = current - (currentY * strideInts);
-                        area++;
-                        if (currentX > 0)
-                        {
-                            TryEnqueue(current - 1, value, region, indices, labels, queue);
-                        }
-                        if (currentX + 1 < width)
-                        {
-                            TryEnqueue(current + 1, value, region, indices, labels, queue);
-                        }
-                        if (currentY > 0)
-                        {
-                            TryEnqueue(current - strideInts, value, region, indices, labels, queue);
-                        }
-                        if (currentY + 1 < height)
-                        {
-                            TryEnqueue(current + strideInts, value, region, indices, labels, queue);
-                        }
-                    }
-
-                    values.Add(value);
-                    areas.Add(area);
                 }
             }
         }
@@ -317,16 +269,6 @@ namespace PaintTranslator.Imaging.Styles.Stages
             }
 
             return root;
-        }
-
-        private static void TryEnqueue(
-            int at, int value, int region, int[] indices, int[] labels, Queue<int> queue)
-        {
-            if (labels[at] < 0 && indices[at] == value)
-            {
-                labels[at] = region;
-                queue.Enqueue(at);
-            }
         }
     }
 }

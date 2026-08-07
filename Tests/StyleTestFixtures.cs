@@ -50,6 +50,20 @@ namespace PaintTranslator.Tests
         }
 
         /// <summary>
+        /// A three-paint palette spanning light, warm and dark, which is enough for
+        /// the candidate set to have interior structure without making a test slow.
+        /// </summary>
+        internal static IReadOnlyList<PigmentCoefficients> ThreePaints()
+        {
+            return new[]
+            {
+                PigmentLibrary.Selectable[0],   // Titanium White
+                PigmentLibrary.Selectable[6],   // C.P. Cadmium Red Light
+                PigmentLibrary.Selectable[11],  // Ultramarine Blue
+            };
+        }
+
+        /// <summary>
         /// A smooth bilinear-ish gradient spanning a wide range of hue and
         /// lightness, large enough that a style collapsing chroma to a handful of
         /// boundary candidates shows up as a sharp drop in distinct-colour count
