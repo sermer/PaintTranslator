@@ -15,7 +15,7 @@ namespace PaintTranslator.Imaging.Styles
     /// style can reshape the achievable gamut without ever being able to name a
     /// colour the paints cannot actually mix to.
     /// </summary>
-    internal sealed class MixtureBuilder
+    public sealed class MixtureBuilder
     {
         // A neutral mother should be near middle grey as well as low-chroma. A
         // palette containing white and black otherwise always selects white because

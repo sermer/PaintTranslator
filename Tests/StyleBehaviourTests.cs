@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Imaging.Styles.Stages;
@@ -69,7 +68,7 @@ namespace PaintTranslator.Tests
         public void FauvismRaisesMeanChromaAboveRealism()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.SixPaints();
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(128, 128);
+            PixelImage source = StyleTestFixtures.BuildGradient(128, 128);
 
             double realismChroma = MeanChroma(RenderStyle(source, paints, "Realism"));
             double fauvismChroma = MeanChroma(RenderStyle(source, paints, "Fauvism"));
@@ -97,7 +96,7 @@ namespace PaintTranslator.Tests
         public void TonalismLowersMeanChromaBelowRealism()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.SixPaints();
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(128, 128);
+            PixelImage source = StyleTestFixtures.BuildGradient(128, 128);
 
             double realismChroma = MeanChroma(RenderStyle(source, paints, "Realism"));
             double tonalismChroma = MeanChroma(RenderStyle(source, paints, "Tonalism"));
@@ -129,7 +128,7 @@ namespace PaintTranslator.Tests
         public void TonalismNarrowsTheLightnessRange()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.SixPaints();
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(128, 128);
+            PixelImage source = StyleTestFixtures.BuildGradient(128, 128);
 
             double realismSpread = LightnessStandardDeviation(RenderStyle(source, paints, "Realism"));
             double tonalismSpread = LightnessStandardDeviation(RenderStyle(source, paints, "Tonalism"));
@@ -218,7 +217,7 @@ namespace PaintTranslator.Tests
         public void NoStyleBandsTheGradient()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.SixPaints();
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(128, 128);
+            PixelImage source = StyleTestFixtures.BuildGradient(128, 128);
 
             int realismDistinct = DistinctColourCount(RenderStyle(source, paints, "Realism"));
 
@@ -485,8 +484,9 @@ namespace PaintTranslator.Tests
                     $"style '{style.Name}' has no measured paintability baseline recorded in this test — " +
                     "add one rather than falling back to a bar chosen for a different style");
 
-                using Bitmap source = StyleTestFixtures.BuildNoisyGradient(256, 256, 3.0);
-                using Bitmap converted = StylePipeline.Render(source, paints, style, 0, StylePipeline.DefaultValues(style));
+                PixelImage source = StyleTestFixtures.BuildNoisyGradient(256, 256, 3.0);
+                PixelImage converted = StylePipeline.Render(
+                    source, paints, style, 0, StylePipeline.DefaultValues(style));
 
                 int[] pixels = StyleTestFixtures.ReadPixels(converted, out int strideInts);
                 double mark = RenderContext.DefaultMarkPixels(converted.Width, converted.Height) * style.MarkScale;
@@ -502,106 +502,98 @@ namespace PaintTranslator.Tests
             }
         }
 
-        private static Bitmap RenderStyle(Bitmap source, IReadOnlyList<PigmentCoefficients> paints, string styleName)
+        private static PixelImage RenderStyle(PixelImage source, IReadOnlyList<PigmentCoefficients> paints, string styleName)
         {
             StyleDefinition style = StyleRegistry.ByName(styleName);
-            return StylePipeline.Render(source, paints, style, 0, StylePipeline.DefaultValues(style));
+            return StylePipeline.Render(
+                source, paints, style, 0, StylePipeline.DefaultValues(style));
         }
 
         /// <summary>
-        /// The mean CIELAB C*ab across every pixel of a converted bitmap.
+        /// The mean CIELAB C*ab across every pixel of a converted image.
         /// </summary>
-        private static double MeanChroma(Bitmap converted)
+        private static double MeanChroma(PixelImage converted)
         {
-            using (converted)
+            int[] pixels = StyleTestFixtures.ReadPixels(converted, out int strideInts);
+            double total = 0.0;
+            int count = 0;
+
+            for (int y = 0; y < converted.Height; y++)
             {
-                int[] pixels = StyleTestFixtures.ReadPixels(converted, out int strideInts);
-                double total = 0.0;
-                int count = 0;
-
-                for (int y = 0; y < converted.Height; y++)
+                int row = y * strideInts;
+                for (int x = 0; x < converted.Width; x++)
                 {
-                    int row = y * strideInts;
-                    for (int x = 0; x < converted.Width; x++)
-                    {
-                        int pixel = pixels[row + x];
-                        PalettePhotoConverter.RgbToLab(
-                            (pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF,
-                            out double _, out double a, out double b);
+                    int pixel = pixels[row + x];
+                    PalettePhotoConverter.RgbToLab(
+                        (pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF,
+                        out double _, out double a, out double b);
 
-                        total += Math.Sqrt((a * a) + (b * b));
-                        count++;
-                    }
+                    total += Math.Sqrt((a * a) + (b * b));
+                    count++;
                 }
-
-                return total / count;
             }
+
+            return total / count;
         }
 
         /// <summary>
         /// The population standard deviation of CIELAB L* across every pixel of a
-        /// converted bitmap.
+        /// converted image.
         /// </summary>
-        private static double LightnessStandardDeviation(Bitmap converted)
+        private static double LightnessStandardDeviation(PixelImage converted)
         {
-            using (converted)
+            int[] pixels = StyleTestFixtures.ReadPixels(converted, out int strideInts);
+            var lightness = new List<double>(converted.Width * converted.Height);
+
+            for (int y = 0; y < converted.Height; y++)
             {
-                int[] pixels = StyleTestFixtures.ReadPixels(converted, out int strideInts);
-                var lightness = new List<double>(converted.Width * converted.Height);
-
-                for (int y = 0; y < converted.Height; y++)
+                int row = y * strideInts;
+                for (int x = 0; x < converted.Width; x++)
                 {
-                    int row = y * strideInts;
-                    for (int x = 0; x < converted.Width; x++)
-                    {
-                        int pixel = pixels[row + x];
-                        PalettePhotoConverter.RgbToLab(
-                            (pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF,
-                            out double l, out double _, out double _);
-                        lightness.Add(l);
-                    }
+                    int pixel = pixels[row + x];
+                    PalettePhotoConverter.RgbToLab(
+                        (pixel >> 16) & 0xFF, (pixel >> 8) & 0xFF, pixel & 0xFF,
+                        out double l, out double _, out double _);
+                    lightness.Add(l);
                 }
-
-                double mean = 0.0;
-                foreach (double l in lightness)
-                {
-                    mean += l;
-                }
-                mean /= lightness.Count;
-
-                double sumSquaredDeviation = 0.0;
-                foreach (double l in lightness)
-                {
-                    double deviation = l - mean;
-                    sumSquaredDeviation += deviation * deviation;
-                }
-
-                return Math.Sqrt(sumSquaredDeviation / lightness.Count);
             }
+
+            double mean = 0.0;
+            foreach (double l in lightness)
+            {
+                mean += l;
+            }
+            mean /= lightness.Count;
+
+            double sumSquaredDeviation = 0.0;
+            foreach (double l in lightness)
+            {
+                double deviation = l - mean;
+                sumSquaredDeviation += deviation * deviation;
+            }
+
+            return Math.Sqrt(sumSquaredDeviation / lightness.Count);
         }
 
         /// <summary>
-        /// The number of distinct 24-bit RGB colours present in a converted bitmap,
+        /// The number of distinct 24-bit RGB colours present in a converted image,
         /// ignoring alpha.
         /// </summary>
-        private static int DistinctColourCount(Bitmap converted)
+        private static int DistinctColourCount(PixelImage converted)
         {
-            using (converted)
+            int[] pixels = StyleTestFixtures.ReadPixels(converted, out int strideInts);
+            var distinct = new HashSet<int>();
+
+            for (int y = 0; y < converted.Height; y++)
             {
-                int[] pixels = StyleTestFixtures.ReadPixels(converted, out int strideInts);
-                var distinct = new HashSet<int>();
-
-                for (int y = 0; y < converted.Height; y++)
+                int row = y * strideInts;
+                for (int x = 0; x < converted.Width; x++)
                 {
-                    int row = y * strideInts;
-                    for (int x = 0; x < converted.Width; x++)
-                    {
-                        distinct.Add(pixels[row + x] & 0x00FFFFFF);
-                    }
+                    distinct.Add(pixels[row + x] & 0x00FFFFFF);
                 }
-
-                return distinct.Count;
             }
+
+            return distinct.Count;
         }
 
     }

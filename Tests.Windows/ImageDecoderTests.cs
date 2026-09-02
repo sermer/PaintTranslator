@@ -3,6 +3,7 @@ using System.Drawing;
 using System.IO;
 using ImageMagick;
 using PaintTranslator.Imaging;
+using PaintTranslator.Windows;
 using Xunit;
 
 namespace PaintTranslator.Tests

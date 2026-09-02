@@ -14,7 +14,7 @@ namespace PaintTranslator.Imaging.Styles
     /// <param name="Default">The value a freshly selected style starts at.</param>
     /// <param name="Unit">A short suffix for the readout, such as "px". Empty for a
     /// bare number.</param>
-    internal sealed record StyleParameter(
+    public sealed record StyleParameter(
         string Id, string Label, double Minimum, double Maximum, double Default, string Unit);
 
     /// <summary>
@@ -27,7 +27,7 @@ namespace PaintTranslator.Imaging.Styles
     /// pipeline is shaped to avoid.
     /// </para>
     /// </summary>
-    internal sealed class ParameterValues
+    public sealed class ParameterValues
     {
         private readonly Dictionary<string, double> values;
 

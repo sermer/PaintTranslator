@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Linq;
-using System.Runtime.InteropServices;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Pigments;
@@ -39,8 +36,7 @@ namespace PaintTranslator.Benchmarks
                 ? StyleRegistry.All
                 : new[] { StyleRegistry.ByName(options.StyleName) };
 
-            using Bitmap source = BuildNoisyGradient(options.Width, options.Height);
-            SourceFrame sourceFrame = SourceFrame.Create(source);
+            PixelImage sourceFrame = BuildNoisyGradient(options.Width, options.Height);
             Console.WriteLine(
                 $"source={options.Width}x{options.Height} paints={paints.Count} " +
                 $"iterations={options.Iterations} blur={options.BlurRadius} mark={options.MarkPixels}");
@@ -54,7 +50,7 @@ namespace PaintTranslator.Benchmarks
         }
 
         private static void RunStyle(
-            SourceFrame source,
+            PixelImage source,
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
             Options options)
@@ -87,7 +83,7 @@ namespace PaintTranslator.Benchmarks
                 var diagnostics = new RenderDiagnostics();
                 long allocatedBefore = GC.GetTotalAllocatedBytes(precise: false);
                 stopwatch.Restart();
-                using Bitmap result = StylePipeline.Render(
+                PixelImage result = StylePipeline.Render(
                     source,
                     paints,
                     renderStyle,
@@ -124,69 +120,35 @@ namespace PaintTranslator.Benchmarks
                 : sorted[middle];
         }
 
-        private static ulong Checksum(Bitmap bitmap)
+        private static ulong Checksum(PixelImage image)
         {
-            BitmapData data = bitmap.LockBits(
-                new Rectangle(0, 0, bitmap.Width, bitmap.Height),
-                ImageLockMode.ReadOnly,
-                PixelFormat.Format32bppArgb);
-            try
+            ulong hash = 14695981039346656037UL;
+            foreach (int pixel in image.Pixels)
             {
-                int strideInts = data.Stride / 4;
-                var pixels = new int[strideInts * bitmap.Height];
-                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
-                ulong hash = 14695981039346656037UL;
-                for (int y = 0; y < bitmap.Height; y++)
-                {
-                    int row = y * strideInts;
-                    for (int x = 0; x < bitmap.Width; x++)
-                    {
-                        hash ^= (uint)pixels[row + x];
-                        hash *= 1099511628211UL;
-                    }
-                }
+                hash ^= (uint)pixel;
+                hash *= 1099511628211UL;
+            }
 
-                return hash;
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
-            }
+            return hash;
         }
 
-        private static Bitmap BuildNoisyGradient(int width, int height)
+        private static PixelImage BuildNoisyGradient(int width, int height)
         {
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
-            BitmapData data = bitmap.LockBits(
-                new Rectangle(0, 0, width, height),
-                ImageLockMode.WriteOnly,
-                PixelFormat.Format32bppArgb);
-
-            try
+            var pixels = new int[width * height];
+            for (int y = 0; y < height; y++)
             {
-                int strideInts = data.Stride / 4;
-                var pixels = new int[strideInts * height];
-                for (int y = 0; y < height; y++)
+                int row = y * width;
+                for (int x = 0; x < width; x++)
                 {
-                    int row = y * strideInts;
-                    for (int x = 0; x < width; x++)
-                    {
-                        int noise = (((x * 73856093) ^ (y * 19349663)) & 15) - 8;
-                        int r = Math.Clamp(((x * 255) / Math.Max(width - 1, 1)) + noise, 0, 255);
-                        int g = Math.Clamp(((y * 255) / Math.Max(height - 1, 1)) - noise, 0, 255);
-                        int b = Math.Clamp((((x + y) * 255) / Math.Max(width + height - 2, 1)) + noise, 0, 255);
-                        pixels[row + x] = unchecked((int)0xFF000000) | (r << 16) | (g << 8) | b;
-                    }
+                    int noise = (((x * 73856093) ^ (y * 19349663)) & 15) - 8;
+                    int r = Math.Clamp(((x * 255) / Math.Max(width - 1, 1)) + noise, 0, 255);
+                    int g = Math.Clamp(((y * 255) / Math.Max(height - 1, 1)) - noise, 0, 255);
+                    int b = Math.Clamp((((x + y) * 255) / Math.Max(width + height - 2, 1)) + noise, 0, 255);
+                    pixels[row + x] = unchecked((int)0xFF000000) | (r << 16) | (g << 8) | b;
                 }
-
-                Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
             }
 
-            return bitmap;
+            return PixelImage.FromPixels(width, height, pixels);
         }
 
         private sealed class Options

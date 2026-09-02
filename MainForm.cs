@@ -11,6 +11,7 @@ using PaintTranslator.Pigments;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Input;
+using PaintTranslator.Windows;
 
 namespace PaintTranslator
 {
@@ -45,7 +46,7 @@ namespace PaintTranslator
         /// Immutable pixels from the most recently loaded photo. Every conversion
         /// starts from this frame, even after a prior result replaces the display.
         /// </summary>
-        private SourceFrame sourceFrame;
+        private PixelImage sourceFrame;
 
 
         /// <summary>
@@ -100,7 +101,7 @@ namespace PaintTranslator
         /// <summary>
         /// An immutable downsampled frame used for responsive interactive previews.
         /// </summary>
-        private SourceFrame previewFrame;
+        private PixelImage previewFrame;
 
         /// <summary>Debounces rapid slider ticks before starting a preview frame.</summary>
         private readonly System.Windows.Forms.Timer previewTimer;
@@ -255,7 +256,7 @@ namespace PaintTranslator
         /// </summary>
         private ConversionRenderRequest CaptureRenderRequest(bool preview)
         {
-            SourceFrame source = preview ? previewFrame : sourceFrame;
+            PixelImage source = preview ? previewFrame : sourceFrame;
             if (source == null)
             {
                 return null;
@@ -299,10 +300,11 @@ namespace PaintTranslator
                 return null;
             }
 
-            return StylePipeline.Render(
+            PixelImage rendered = StylePipeline.Render(
                 request.Source, request.Paints, request.Style, request.MarkPixels,
                 request.Values, candidates, cancellationToken,
                 colourMapCache: colourMapCache);
+            return rendered == null ? null : GdiImageAdapter.ToBitmap(rendered);
         }
 
         /// <summary>
@@ -498,7 +500,7 @@ namespace PaintTranslator
         private sealed class ConversionRenderRequest
         {
             public ConversionRenderRequest(
-                SourceFrame source,
+                PixelImage source,
                 IReadOnlyList<PigmentCoefficients> paints,
                 StyleDefinition style,
                 int markPixels,
@@ -513,7 +515,7 @@ namespace PaintTranslator
                 Generation = generation;
             }
 
-            public SourceFrame Source { get; }
+            public PixelImage Source { get; }
             public IReadOnlyList<PigmentCoefficients> Paints { get; }
             public StyleDefinition Style { get; }
             public int MarkPixels { get; }
@@ -1045,14 +1047,13 @@ namespace PaintTranslator
 
             // Normalize both render inputs once. Subsequent workers share these
             // immutable frames even after the form adopts a replacement image.
-            (SourceFrame Full, SourceFrame PreviewFrame) prepared;
+            (PixelImage Full, PixelImage PreviewFrame) prepared;
             try
             {
                 prepared = await Task.Run(() =>
                 {
-                    SourceFrame full = SourceFrame.Create(photo);
-                    using Bitmap preview = ConversionPreview.CreateSource(photo);
-                    SourceFrame previewFrame = SourceFrame.Create(preview);
+                    PixelImage full = GdiImageAdapter.FromBitmap(photo);
+                    PixelImage previewFrame = ConversionPreview.CreateSource(full);
                     return (full, previewFrame);
                 });
             }
@@ -1084,7 +1085,7 @@ namespace PaintTranslator
                 suppressPreviewScheduling = false;
             }
 
-            SetDisplayedImage(sourceFrame.CreateBitmap());
+            SetDisplayedImage(GdiImageAdapter.ToBitmap(sourceFrame));
             displayedWheel = ColorWheelDisplay.None;
             Text = $"Paint Translator - {sourcePhotoName}";
             SchedulePreview();
@@ -1151,7 +1152,7 @@ namespace PaintTranslator
         private void TraditionalColorWheelMenuItem_Click(object sender, EventArgs e)
         {
             DisplayColorWheel(
-                ColorWheelGenerator.CreateTraditional(512),
+                GdiImageAdapter.ToBitmap(ColorWheelGenerator.CreateTraditional(512)),
                 ColorWheelDisplay.Traditional,
                 "Traditional Color Wheel");
         }
@@ -1160,7 +1161,7 @@ namespace PaintTranslator
         private void SelectedPaintColorWheelMenuItem_Click(object sender, EventArgs e)
         {
             DisplayColorWheel(
-                ColorWheelGenerator.Create(512, GetSelectedPaints(null)),
+                GdiImageAdapter.ToBitmap(ColorWheelGenerator.Create(512, GetSelectedPaints(null))),
                 ColorWheelDisplay.SelectedPaints,
                 "Selected Golden Paint Wheel");
         }
@@ -1278,7 +1279,7 @@ namespace PaintTranslator
 
             if (displayedWheel == ColorWheelDisplay.SelectedPaints)
             {
-                SetDisplayedImage(ColorWheelGenerator.Create(512, selected ?? GetSelectedPaints(null)));
+                SetDisplayedImage(GdiImageAdapter.ToBitmap(ColorWheelGenerator.Create(512, selected ?? GetSelectedPaints(null))));
             }
             else if (!IsWheelDisplayed)
             {

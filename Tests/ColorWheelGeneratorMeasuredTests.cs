@@ -41,7 +41,7 @@ namespace PaintTranslator.Tests
             IReadOnlyList<PigmentCoefficients> paints = PigmentLibrary.Selectable;
             var reflectance = new double[SpectralBands.Count];
 
-            using Bitmap wheel = ColorWheelGenerator.Create(Diameter, paints);
+            PixelImage wheel = ColorWheelGenerator.Create(Diameter, paints);
 
             for (int y = 8; y < Diameter; y += 11)
             {
@@ -55,7 +55,7 @@ namespace PaintTranslator.Tests
 
                     KubelkaMunk.Mix(paints, weights, reflectance);
                     Color expected = SpectralRenderer.ToDisplayColor(reflectance, out _);
-                    Color actual = wheel.GetPixel(x, y);
+                    Color actual = Color.FromArgb(wheel[x, y]);
 
                     Assert.Equal(expected.R, actual.R);
                     Assert.Equal(expected.G, actual.G);
@@ -79,14 +79,14 @@ namespace PaintTranslator.Tests
                 PigmentLibrary.All.Single(p => p.Name == "Diarylide Yellow"),
             };
 
-            using Bitmap wheel = ColorWheelGenerator.Create(Diameter, paints);
+            PixelImage wheel = ColorWheelGenerator.Create(Diameter, paints);
 
             int greenPixels = 0;
             for (int y = 0; y < Diameter; y++)
             {
                 for (int x = 0; x < Diameter; x++)
                 {
-                    Color pixel = wheel.GetPixel(x, y);
+                    Color pixel = Color.FromArgb(wheel[x, y]);
                     if (pixel.A == 0)
                     {
                         continue;
@@ -112,9 +112,9 @@ namespace PaintTranslator.Tests
         [Fact]
         public void AnEmptyPaletteGivesATransparentWheel()
         {
-            using Bitmap wheel = ColorWheelGenerator.Create(64, new PigmentCoefficients[0]);
+            PixelImage wheel = ColorWheelGenerator.Create(64, new PigmentCoefficients[0]);
 
-            Assert.Equal(0, wheel.GetPixel(32, 32).A);
+            Assert.Equal(0, Color.FromArgb(wheel[32, 32]).A);
         }
 
         /// <summary>
@@ -125,14 +125,10 @@ namespace PaintTranslator.Tests
         public void AFullSizeWheelGeneratesQuickly()
         {
             // Warm the JIT and the static library load before timing anything.
-            using (Bitmap warmup = ColorWheelGenerator.Create(64, PigmentLibrary.Selectable))
-            {
-            }
+            _ = ColorWheelGenerator.Create(64, PigmentLibrary.Selectable);
 
             var stopwatch = Stopwatch.StartNew();
-            using (Bitmap wheel = ColorWheelGenerator.Create(512, PigmentLibrary.Selectable))
-            {
-            }
+            _ = ColorWheelGenerator.Create(512, PigmentLibrary.Selectable);
 
             stopwatch.Stop();
             this.output.WriteLine($"512px wheel, 19 paints: {stopwatch.ElapsedMilliseconds} ms");

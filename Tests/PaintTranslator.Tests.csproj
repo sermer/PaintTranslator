@@ -1,31 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net5.0-windows</TargetFramework>
-    <!-- The project under test is a WinForms app, so its types need the desktop
-         framework reference to resolve here too. -->
-    <UseWindowsForms>true</UseWindowsForms>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <SelfContained>false</SelfContained>
+    <TargetFramework>net10.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <RootNamespace>PaintTranslator.Tests</RootNamespace>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pinned to the last releases that still target net5.0; the current ones resolve
-         against .NET Framework here and leave the run with no test adapter. -->
-    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.6.3" />
-    <PackageReference Include="xunit" Version="2.4.2" />
-    <PackageReference Include="xunit.runner.visualstudio" Version="2.4.5" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <!-- PNG read/write for the golden and contact-sheet images. System.Drawing.Common
+         throws on macOS, and the app never needs a PNG codec of its own (GDI on
+         Windows, the browser on the web), so the codec lives here only. -->
+    <PackageReference Include="SixLabors.ImageSharp" Version="4.1.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <!-- The parity gate compares this project's kernel against Unicolour's independent
-         implementation. Referenced here explicitly because Task 14 drops Unicolour from
-         the application, and the gate must outlive that removal. -->
+         implementation. Referenced here explicitly because the application no longer
+         depends on Unicolour, and the gate must outlive that removal. -->
     <PackageReference Include="Wacton.Unicolour" Version="8.0.0" />
     <PackageReference Include="Wacton.Unicolour.Datasets" Version="5.0.0" />
+    <!-- TestImages encodes sample files in every format the sniffer must recognise.
+         The AnyCPU package carries native codecs for macOS arm64 as well as Windows;
+         the app itself pins the smaller x64 package. -->
+    <PackageReference Include="Magick.NET-Q8-AnyCPU" Version="14.15.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\PaintTranslator.csproj" />
+    <ProjectReference Include="..\Core\PaintTranslator.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,8 +38,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- HEIC is the one format the tests cannot generate: the Windows build of
-         ImageMagick ships an HEVC decoder but no encoder. -->
+    <!-- HEIC is the one format the tests cannot generate: ImageMagick ships an HEVC
+         decoder but no encoder. -->
     <None Update="Assets\**" CopyToOutputDirectory="PreserveNewest" />
     <!-- GoldenStyleTests compares against these at run time, so they must land
          beside the test assembly; without this, a clean checkout has no Golden

@@ -35,25 +35,29 @@ when adding to them, and check the warnings before quoting a figure.
 
 ## Commands
 
-```powershell
-dotnet build PaintTranslator.sln                      # builds all four projects
-dotnet test Tests/PaintTranslator.Tests.csproj        # 317 tests, ~13s
-dotnet run --project PaintTranslator.csproj           # the app
+```
+dotnet build PaintTranslator.sln                      # builds all projects, on macOS too
+dotnet test Tests/PaintTranslator.Tests.csproj        # the cross-platform suite
+dotnet test Tests.Windows/PaintTranslator.Windows.Tests.csproj   # 12 GDI/WinForms tests, Windows only
+dotnet run --project PaintTranslator.csproj           # the WinForms app, Windows only
 ```
 
 Run a single test or class with a filter:
 
-```powershell
+```
 dotnet test Tests/PaintTranslator.Tests.csproj --filter "FullyQualifiedName~UnicolourParityTests"
 dotnet test Tests/PaintTranslator.Tests.csproj --filter "FullyQualifiedName~ZeroRadiusLeavesEveryPixelUntouched"
 ```
 
-Six `NETSDK1138` warnings about `net5.0-windows` being out of support are expected and
-pre-existing. A clean build is 0 errors, 6 warnings.
+A clean build is 0 errors. The only expected warning is a Six Labors ImageSharp
+licence notice from the test project (ImageSharp 4.x prints it at build time; it is a
+test-only dependency) — a new warning beyond that one is a regression. The
+Windows-only projects compile on macOS through `EnableWindowsTargeting` but cannot run
+there.
 
 Two auxiliary executables:
 
-```powershell
+```
 dotnet run --project BlendTests/PaintTranslator.BlendTests.csproj   # visual gradient-strip harness
 dotnet run --project Tools/IngestSpectra/IngestSpectra.csproj       # regenerates Pigments/PigmentData.bin
 ```
@@ -64,14 +68,21 @@ review the manifest it emits alongside the binary.
 
 ## Architecture
 
-A WinForms app (`net5.0-windows`, pinned to `win-x64`) that converts photos into the
+A WinForms app (`net10.0-windows`, pinned to `win-x64`) that converts photos into the
 colours a chosen set of real acrylic paints can actually be mixed to. The physics is real
 measured data, not a colour-space approximation.
 
+The kernel lives in `Core/` (`PaintTranslator.Core`, `net10.0`, no Windows dependencies).
+The WinForms app at the root is a thin consumer: `Windows/GdiImageAdapter` converts
+between `Bitmap` and Core's `PixelImage`, `Windows/ImageDecoder` wraps GDI and Magick.NET,
+and `Windows/GridOverlayRenderer` strokes `GridGeometry`. Nothing under `Core/` may
+reference `System.Drawing.Common`; `System.Drawing.Primitives` (`Color`, `Point`, `Size`)
+is fine.
+
 ### The spectral pipeline
 
-Measured spectra → `Tools/IngestSpectra` → `Pigments/PigmentData.bin` (embedded resource)
-→ `PigmentLibrary` → `KubelkaMunk` → `SpectralRenderer` → `ColorSpace` (CIELAB).
+Measured spectra → `Tools/IngestSpectra` → `Core/Pigments/PigmentData.bin` (embedded
+resource) → `PigmentLibrary` → `KubelkaMunk` → `SpectralRenderer` → `ColorSpace` (CIELAB).
 
 Everything downstream depends on properties established upstream, so read the doc comments
 before changing any of it. Load-bearing decisions:
@@ -121,8 +132,10 @@ depends on *position* rather than colour breaks that cache and needs the key ext
 
 ## Tests
 
-xUnit. Package versions are pinned to the last releases targeting `net5.0`; newer ones
-resolve against .NET Framework and leave the run with no adapter.
+xUnit. `Tests/` targets `net10.0` and runs cross-platform; `Tests.Windows/` targets
+`net10.0-windows` and holds only the GDI/WinForms-dependent tests. Package versions were
+pinned to the last releases targeting `net5.0` while the whole suite ran under it — now
+historical, since both test projects moved to `net10.0`.
 
 Three tests are structurally unusual and worth knowing before editing them:
 
@@ -137,10 +150,15 @@ Three tests are structurally unusual and worth knowing before editing them:
   examples, catching paints that are individually plausible but behave wrongly in company.
 - **`ContactSheetTests` asserts almost nothing.** It renders mixing sweeps to PNG for human
   inspection, and runs as a test only so it cannot silently break. Its real output is the
-  image.
+  image. It now lives in `Tests.Windows/`, alongside `ImageDecoderTests`, `ImageCanvasTests`
+  and `UiThemeTests` — the Windows-only project.
+
+`Tests/PaintTranslator.Tests.csproj` is 403 tests and runs cross-platform, including on
+this Mac. Golden PNGs are read through `Tests/PngCodec.cs` (ImageSharp) rather than GDI, so
+they stay comparable on both platforms.
 
 `Tests` compiles `GoldenSpectraSource.cs` and `SpreadsheetReader.cs` from the ingest tool
-directly, so the derivation is tested rather than only its output. The app grants
+directly, so the derivation is tested rather than only its output. Core grants
 `InternalsVisibleTo` to `PaintTranslator.Tests` so tests measure the same CIELAB conversion
 the matcher uses instead of a duplicate.
 
@@ -149,8 +167,8 @@ the matcher uses instead of a duplicate.
 - **Doc comments carry the reasoning, not restatements of the signature.** The existing
   ones explain why a constant has its value, what breaks otherwise, and what earlier
   approach failed. Match that; a comment that only names the method again is noise.
-- The `win-x64` RID is pinned because Magick.NET otherwise copies Linux and macOS native
-  codecs and the output grows from 25 MB to 131 MB.
+- The `win-x64` RID is pinned on the app project (not Core) because Magick.NET otherwise
+  copies Linux and macOS native codecs and the output grows from 25 MB to 131 MB.
 - Failure modes throughout the imaging code are silent and visual — a wrong kernel or a
   mis-encoded average produces a slightly wrong picture rather than an exception. Prefer
   tests that pin numeric properties over tests that check nothing throws.

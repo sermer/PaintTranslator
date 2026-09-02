@@ -1,8 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
+using PaintTranslator.Imaging;
 using PaintTranslator.Pigments;
 
 namespace PaintTranslator.Tests
@@ -69,12 +67,12 @@ namespace PaintTranslator.Tests
         /// boundary candidates shows up as a sharp drop in distinct-colour count
         /// rather than being lost in a small sample.
         /// </summary>
-        /// <param name="width">The bitmap width in pixels.</param>
-        /// <param name="height">The bitmap height in pixels.</param>
-        /// <returns>A new opaque 32bpp ARGB bitmap.</returns>
-        internal static Bitmap BuildGradientBitmap(int width, int height)
+        /// <param name="width">The image width in pixels.</param>
+        /// <param name="height">The image height in pixels.</param>
+        /// <returns>A new opaque ARGB image.</returns>
+        internal static PixelImage BuildGradient(int width, int height)
         {
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var pixels = new int[width * height];
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
@@ -82,27 +80,32 @@ namespace PaintTranslator.Tests
                     int r = (x * 255) / (width - 1);
                     int g = (y * 255) / (height - 1);
                     int b = ((x + y) * 255) / (width + height - 2);
-                    bitmap.SetPixel(x, y, Color.FromArgb(255, r, g, b));
+                    pixels[(y * width) + x] = Argb(255, r, g, b);
                 }
             }
 
-            return bitmap;
+            return PixelImage.FromPixels(width, height, pixels);
         }
 
         /// <summary>
         /// A smooth bilinear field between four plausible photographic colours, with
         /// Gaussian sensor noise layered on top at a fixed seed so the same call
-        /// always produces the same bitmap. Neighbouring pixels differ by well under
+        /// always produces the same image. Neighbouring pixels differ by well under
         /// one 8-bit code before the noise is added, so anything fragmented in a
         /// converted output came from the conversion rather than the source.
+        /// <para>
+        /// The loop order and the <c>Random(7)</c> seed are load-bearing: the golden
+        /// PNGs were rendered from exactly this sequence of pixels, and the
+        /// benchmark keeps its own copy of this generator that must match.
+        /// </para>
         /// </summary>
-        /// <param name="width">The bitmap width in pixels.</param>
-        /// <param name="height">The bitmap height in pixels.</param>
+        /// <param name="width">The image width in pixels.</param>
+        /// <param name="height">The image height in pixels.</param>
         /// <param name="sigma">The standard deviation of the Gaussian noise added to
         /// each channel, in 8-bit code values. Zero disables the noise term
         /// entirely, leaving the bare bilinear field.</param>
-        /// <returns>A new opaque 32bpp ARGB bitmap.</returns>
-        internal static Bitmap BuildNoisyGradient(int width, int height, double sigma)
+        /// <returns>A new opaque ARGB image.</returns>
+        internal static PixelImage BuildNoisyGradient(int width, int height, double sigma)
         {
             var corners = new[]
             {
@@ -113,7 +116,7 @@ namespace PaintTranslator.Tests
             };
 
             var rng = new Random(7);
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var pixels = new int[width * height];
             for (int y = 0; y < height; y++)
             {
                 double fy = y / (double)(height - 1);
@@ -136,41 +139,28 @@ namespace PaintTranslator.Tests
                         channel[c] = Math.Clamp((int)Math.Round(value), 0, 255);
                     }
 
-                    bitmap.SetPixel(x, y, Color.FromArgb(255, channel[0], channel[1], channel[2]));
+                    pixels[(y * width) + x] = Argb(255, channel[0], channel[1], channel[2]);
                 }
             }
 
-            return bitmap;
+            return PixelImage.FromPixels(width, height, pixels);
         }
 
         /// <summary>
-        /// Reads every pixel of a locked-then-copied bitmap into a flat ARGB array,
-        /// so callers can inspect or compare pixels without holding the bitmap
-        /// locked for the duration.
+        /// Kept with the old <c>out</c> stride so the many call sites that index
+        /// <c>row = y * stride</c> do not change; a <see cref="PixelImage"/> has no
+        /// padding, so the stride is simply the width.
         /// </summary>
-        /// <param name="bitmap">The bitmap to read.</param>
-        /// <param name="strideInts">The number of ints per pixel row, i.e. the raw
-        /// byte stride divided by four.</param>
-        /// <returns>The bitmap's pixels as 32-bit ARGB values, row-major with each
-        /// row padded to <paramref name="strideInts"/> ints.</returns>
-        internal static int[] ReadPixels(Bitmap bitmap, out int strideInts)
+        internal static int[] ReadPixels(PixelImage image, out int strideInts)
         {
-            BitmapData data = bitmap.LockBits(
-                new Rectangle(0, 0, bitmap.Width, bitmap.Height),
-                ImageLockMode.ReadOnly,
-                PixelFormat.Format32bppArgb);
-            try
-            {
-                strideInts = data.Stride / 4;
-                var pixels = new int[strideInts * bitmap.Height];
-                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+            strideInts = image.Width;
+            return image.CopyPixels();
+        }
 
-                return pixels;
-            }
-            finally
-            {
-                bitmap.UnlockBits(data);
-            }
+        /// <summary>Packs channels into <c>0xAARRGGBB</c>, matching <see cref="PixelImage"/>'s layout.</summary>
+        internal static int Argb(int a, int r, int g, int b)
+        {
+            return (a << 24) | (r << 16) | (g << 8) | b;
         }
     }
 }

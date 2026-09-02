@@ -9,7 +9,7 @@ namespace PaintTranslator.Imaging.Styles
     /// the key: they change which RGB bins occur or how mapped indices are grouped,
     /// not what a given RGB bin maps to.
     /// </summary>
-    internal sealed class ColourMapCache
+    public sealed class ColourMapCache
     {
         private const int MaximumEntries = 4;
         private readonly object sync = new object();

@@ -13,7 +13,7 @@ namespace PaintTranslator.Imaging.Styles
     /// to make impossible. A stage that seems to need the answer should be two stages.
     /// </para>
     /// </summary>
-    internal interface IPipelineStage
+    public interface IPipelineStage
     {
         /// <summary>Gets the heading shown above this stage's controls.</summary>
         string DisplayName { get; }
@@ -31,7 +31,7 @@ namespace PaintTranslator.Imaging.Styles
     /// spatially varying belongs here rather than in the remap.
     /// </para>
     /// </summary>
-    internal interface IPreMapStage : IPipelineStage
+    public interface IPreMapStage : IPipelineStage
     {
         /// <summary>
         /// Transforms the pixel buffer in place.
@@ -56,7 +56,7 @@ namespace PaintTranslator.Imaging.Styles
     /// Anything position-dependent belongs in slot 1.
     /// </para>
     /// </summary>
-    internal interface ILabRemap : IPipelineStage
+    public interface ILabRemap : IPipelineStage
     {
         /// <summary>
         /// Maps one colour to another.
@@ -79,7 +79,7 @@ namespace PaintTranslator.Imaging.Styles
     /// Slot 3. Rewrites which mixtures the gamut sampler will render, before any of
     /// them becomes a colour.
     /// </summary>
-    internal interface ICandidateTransform : IPipelineStage
+    public interface ICandidateTransform : IPipelineStage
     {
         /// <summary>
         /// Gets the subset of this stage's parameters that changes the mixtures
@@ -102,7 +102,7 @@ namespace PaintTranslator.Imaging.Styles
     /// image to choose a smaller palette. It runs after slot 1 and after the initial
     /// gamut has been built, while the data is still represented as candidate indices.
     /// </summary>
-    internal interface IImageAwareCandidateTransform
+    public interface IImageAwareCandidateTransform
     {
         CandidateSet Transform(
             CandidateSet candidates,
@@ -117,7 +117,7 @@ namespace PaintTranslator.Imaging.Styles
     /// <summary>
     /// Slot 4. Chooses which candidate a colour becomes, by index.
     /// </summary>
-    internal interface IQuantiser : IPipelineStage
+    public interface IQuantiser : IPipelineStage
     {
         /// <summary>
         /// Gets whether the choice depends on where the pixel is.
@@ -158,7 +158,7 @@ namespace PaintTranslator.Imaging.Styles
     /// to remember; it simply cannot be expressed through this signature.
     /// </para>
     /// </summary>
-    internal interface IPostMapStage : IPipelineStage
+    public interface IPostMapStage : IPipelineStage
     {
         /// <summary>
         /// Rewrites the index buffer in place.

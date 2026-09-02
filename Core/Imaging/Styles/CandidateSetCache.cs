@@ -10,7 +10,7 @@ namespace PaintTranslator.Imaging.Styles
     /// large fixed cost and most interactive controls do not alter it, so repeating it
     /// for every preview frame wastes more time than rendering the preview itself.
     /// </summary>
-    internal sealed class CandidateSetCache
+    public sealed class CandidateSetCache
     {
         private const int MaximumEntries = 4;
         private readonly LinkedList<Entry> entries = new LinkedList<Entry>();

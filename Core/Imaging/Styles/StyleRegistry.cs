@@ -8,7 +8,7 @@ namespace PaintTranslator.Imaging.Styles
     /// The fixed list of painting styles the application offers, and the lookup the
     /// style picker and the converter use to find one by name.
     /// </summary>
-    internal static class StyleRegistry
+    public static class StyleRegistry
     {
         /// <summary>
         /// Gets every style the application offers, in the order they should be

@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using PaintTranslator.Imaging;
 using PaintTranslator.Pigments;
 using Xunit;
@@ -37,7 +35,7 @@ namespace PaintTranslator.Tests
         public void TheMandatoryFloorRunsBeforeTheOptionalBlurNotAfter()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
-            using Bitmap source = BuildEdgeWithNoise(64, 64);
+            PixelImage source = BuildEdgeWithNoise(64, 64);
 
             const int Mark = 8;
             const int BlurRadius = 6;
@@ -55,7 +53,7 @@ namespace PaintTranslator.Tests
 
             int[] expectedMapped = PalettePhotoConverter.MapThroughIndex(paints, expected);
 
-            using Bitmap converted = PalettePhotoConverter.Convert(source, paints, BlurRadius, Mark);
+            PixelImage converted = PalettePhotoConverter.Convert(source, paints, BlurRadius, Mark);
             int[] actual = StyleTestFixtures.ReadPixels(converted, out int actualStride);
 
             int mismatches = 0;
@@ -86,10 +84,10 @@ namespace PaintTranslator.Tests
         /// contrast-lowering have something concrete to disagree about depending on
         /// which runs first.
         /// </summary>
-        private static Bitmap BuildEdgeWithNoise(int width, int height)
+        private static PixelImage BuildEdgeWithNoise(int width, int height)
         {
             var rng = new Random(11);
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var pixels = new int[width * height];
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
@@ -104,11 +102,11 @@ namespace PaintTranslator.Tests
                         channel[c] = Math.Clamp((int)Math.Round(noisy), 0, 255);
                     }
 
-                    bitmap.SetPixel(x, y, Color.FromArgb(255, channel[0], channel[1], channel[2]));
+                    pixels[(y * width) + x] = StyleTestFixtures.Argb(255, channel[0], channel[1], channel[2]);
                 }
             }
 
-            return bitmap;
+            return PixelImage.FromPixels(width, height, pixels);
         }
     }
 }

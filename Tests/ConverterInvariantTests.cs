@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Drawing;
 using PaintTranslator.Imaging;
 using PaintTranslator.Pigments;
 using Xunit;
@@ -29,14 +28,14 @@ namespace PaintTranslator.Tests
                 achievable.Add(argb & 0x00FFFFFF);
             }
 
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
-            using Bitmap converted = PalettePhotoConverter.Convert(source, paints, 0);
+            PixelImage source = StyleTestFixtures.BuildGradient(64, 64);
+            PixelImage converted = PalettePhotoConverter.Convert(source, paints, 0);
 
             for (int y = 0; y < converted.Height; y++)
             {
                 for (int x = 0; x < converted.Width; x++)
                 {
-                    int pixel = converted.GetPixel(x, y).ToArgb() & 0x00FFFFFF;
+                    int pixel = converted[x, y] & 0x00FFFFFF;
                     Assert.Contains(pixel, achievable);
                 }
             }
@@ -56,14 +55,14 @@ namespace PaintTranslator.Tests
                 achievable.Add(argb & 0x00FFFFFF);
             }
 
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
-            using Bitmap converted = PalettePhotoConverter.Convert(source, paints, 4);
+            PixelImage source = StyleTestFixtures.BuildGradient(64, 64);
+            PixelImage converted = PalettePhotoConverter.Convert(source, paints, 4);
 
             for (int y = 0; y < converted.Height; y++)
             {
                 for (int x = 0; x < converted.Width; x++)
                 {
-                    Assert.Contains(converted.GetPixel(x, y).ToArgb() & 0x00FFFFFF, achievable);
+                    Assert.Contains(converted[x, y] & 0x00FFFFFF, achievable);
                 }
             }
         }

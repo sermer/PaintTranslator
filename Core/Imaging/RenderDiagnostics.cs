@@ -10,7 +10,7 @@ namespace PaintTranslator.Imaging
     /// while the benchmark tool measures the shipped implementation rather than a
     /// separately transcribed approximation of it.
     /// </summary>
-    internal sealed class RenderDiagnostics
+    public sealed class RenderDiagnostics
     {
         private readonly List<RenderPhaseTiming> timings = new List<RenderPhaseTiming>();
 
@@ -31,7 +31,7 @@ namespace PaintTranslator.Imaging
     }
 
     /// <summary>One named interval captured during a conversion.</summary>
-    internal readonly struct RenderPhaseTiming
+    public readonly struct RenderPhaseTiming
     {
         public RenderPhaseTiming(string phase, TimeSpan elapsed)
         {

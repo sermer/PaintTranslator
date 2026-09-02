@@ -23,7 +23,7 @@ namespace PaintTranslator
             if (args.Length >= 1 && args[0] == "--generate-colorwheel")
             {
                 string outputPath = args.Length >= 2 ? args[1] : "color-wheel.png";
-                ColorWheelGenerator.SaveToFile(outputPath, 512);
+                PaintTranslator.Windows.ColorWheelExport.SaveToFile(outputPath, 512);
                 return;
             }
 

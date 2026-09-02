@@ -120,8 +120,7 @@ namespace PaintTranslator.Imaging
         /// to be handled by Magick.NET.
         /// </summary>
         /// <param name="format">The format to test.</param>
-        /// <returns>True when <see cref="System.Drawing.Bitmap"/> can read the format
-        /// directly; otherwise false.</returns>
+        /// <returns>True when GDI+ can read the format directly; otherwise false.</returns>
         public static bool IsNativelyDecodable(ImageFileFormat format)
         {
             switch (format)

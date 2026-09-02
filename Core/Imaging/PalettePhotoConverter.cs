@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using PaintTranslator.Imaging.Styles;
 using PaintTranslator.Imaging.Styles.Stages;
 using PaintTranslator.Pigments;
@@ -90,7 +89,7 @@ namespace PaintTranslator.Imaging
         /// <param name="markPixels">One brushmark's width in pixels, which sets how
         /// strongly the mandatory pre-map filter runs. Zero or less derives it from the
         /// image's own dimensions.</param>
-        /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
+        /// <returns>A new image containing the converted photo.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/> or <paramref name="paints"/> is null.</exception>
         /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
         /// <remarks>
@@ -100,8 +99,8 @@ namespace PaintTranslator.Imaging
         /// behaviour this converter always had, from the one place that behaviour is
         /// defined rather than a second copy of it kept in sync by hand.
         /// </remarks>
-        public static Bitmap Convert(
-            Bitmap source,
+        public static PixelImage Convert(
+            PixelImage source,
             IReadOnlyList<PigmentCoefficients> paints,
             int blurRadius = 0,
             int markPixels = 0)
@@ -125,15 +124,14 @@ namespace PaintTranslator.Imaging
         /// <param name="markPixels">One brushmark's width in pixels, which sets how
         /// strongly the mandatory pre-map filter runs. Zero or less derives it from the
         /// image's own dimensions.</param>
-        /// <returns>A new 32-bit ARGB bitmap containing the converted photo.</returns>
+        /// <returns>A new image containing the converted photo.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/>,
         /// <paramref name="paints"/> or <paramref name="style"/> is null.</exception>
         /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
         /// <remarks>
-        /// Internal rather than public: <see cref="StyleDefinition"/> is itself internal,
-        /// and a public method cannot expose an internal type through its signature. The
-        /// style picker that supplies <paramref name="style"/> lives in <c>MainForm</c>,
-        /// in the same assembly, so internal visibility is all it needs.
+        /// Public because the WinForms app and the web client live in other assemblies;
+        /// the kernel's own stage implementations stay internal since no consumer
+        /// constructs them directly.
         /// <para>
         /// Delegates to <see cref="StylePipeline.Render"/> rather than running its own
         /// mapping, so behaviour is defined by <paramref name="style"/>'s stages alone
@@ -148,8 +146,8 @@ namespace PaintTranslator.Imaging
         /// compose the blur stage's values onto.
         /// </para>
         /// </remarks>
-        internal static Bitmap Convert(
-            Bitmap source,
+        public static PixelImage Convert(
+            PixelImage source,
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
             int blurRadius = 0,
@@ -183,7 +181,7 @@ namespace PaintTranslator.Imaging
         /// <see cref="Styles.Stages.OptionalBlur"/> pre-map stage, so this legacy
         /// <c>blurRadius</c> knob and a caller's own live parameter values can be
         /// combined without either caller re-deriving the composition itself.
-        /// Shared by <see cref="Convert(Bitmap, IReadOnlyList{PigmentCoefficients}, StyleDefinition, int, int)"/>
+        /// Shared by <see cref="Convert(PixelImage, IReadOnlyList{PigmentCoefficients}, StyleDefinition, int, int)"/>
         /// and <c>MainForm</c>'s convert button — the two places a
         /// <c>blurRadius</c> slider value meets a style's stages — so the blur
         /// stage's placement after the mandatory floor (see
@@ -209,7 +207,7 @@ namespace PaintTranslator.Imaging
         /// appended to its <see cref="StyleDefinition.PreMap"/>, paired with a
         /// new dictionary holding a copy of <paramref name="values"/> plus that
         /// stage's own default-seeded entry with its radius set.</returns>
-        internal static (StyleDefinition Style, IReadOnlyDictionary<IPipelineStage, ParameterValues> Values) ComposeWithBlur(
+        public static (StyleDefinition Style, IReadOnlyDictionary<IPipelineStage, ParameterValues> Values) ComposeWithBlur(
             StyleDefinition style,
             IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
             int blurRadius)
@@ -335,7 +333,7 @@ namespace PaintTranslator.Imaging
         /// <param name="labL">The resulting L* component.</param>
         /// <param name="labA">The resulting a* component.</param>
         /// <param name="labB">The resulting b* component.</param>
-        internal static void RgbToLab(int r, int g, int b, out double labL, out double labA, out double labB)
+        public static void RgbToLab(int r, int g, int b, out double labL, out double labA, out double labB)
         {
             double rl = ColorSpace.SrgbByteToLinear(r);
             double gl = ColorSpace.SrgbByteToLinear(g);

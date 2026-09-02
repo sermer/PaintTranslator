@@ -16,7 +16,7 @@ namespace PaintTranslator.Imaging
     /// sampling get dense without the conversion getting slow.
     /// </para>
     /// </summary>
-    internal sealed class CandidateSet
+    public sealed class CandidateSet
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="CandidateSet"/> class,

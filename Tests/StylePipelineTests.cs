@@ -1,7 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.Threading;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
@@ -26,7 +24,7 @@ namespace PaintTranslator.Tests
             StyleDefinition style = StyleRegistry.Default;
             IReadOnlyDictionary<IPipelineStage, ParameterValues> values =
                 StylePipeline.DefaultValues(style);
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
+            PixelImage source = StyleTestFixtures.BuildGradient(64, 64);
             using var cancellation = new CancellationTokenSource();
             cancellation.Cancel();
 
@@ -54,7 +52,7 @@ namespace PaintTranslator.Tests
                 Array.Empty<IPostMapStage>());
             IReadOnlyDictionary<IPipelineStage, ParameterValues> values =
                 StylePipeline.DefaultValues(style);
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(32, 32);
+            PixelImage source = StyleTestFixtures.BuildGradient(32, 32);
 
             Assert.Null(StylePipeline.Render(
                 source,
@@ -96,7 +94,7 @@ namespace PaintTranslator.Tests
         public void RealismMatchesAnIndependentBruteForceOracle()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
+            PixelImage source = StyleTestFixtures.BuildGradient(64, 64);
             int mark = RenderContext.DefaultMarkPixels(source.Width, source.Height);
 
             int[] candidateArgb = PalettePhotoConverter.SampleAchievableColors(paints);
@@ -146,7 +144,7 @@ namespace PaintTranslator.Tests
                 }
             }
 
-            using Bitmap converted = PalettePhotoConverter.Convert(source, paints, 0, mark);
+            PixelImage converted = PalettePhotoConverter.Convert(source, paints, 0, mark);
             int[] actual = StyleTestFixtures.ReadPixels(converted, out int actualStride);
 
             int mismatches = 0;
@@ -180,7 +178,7 @@ namespace PaintTranslator.Tests
         public void EveryStyleEmitsOnlyMixableColours()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
+            PixelImage source = StyleTestFixtures.BuildGradient(64, 64);
 
             foreach (StyleDefinition style in StyleRegistry.All)
             {
@@ -196,7 +194,8 @@ namespace PaintTranslator.Tests
                     achievable.Add(argb & 0x00FFFFFF);
                 }
 
-                using Bitmap converted = StylePipeline.Render(source, paints, style, 0, values);
+                PixelImage converted = StylePipeline.Render(
+                    source, paints, style, 0, values);
 
                 int[] pixels = StyleTestFixtures.ReadPixels(converted, out int stride);
                 for (int y = 0; y < converted.Height; y++)
@@ -223,19 +222,19 @@ namespace PaintTranslator.Tests
         public void RenderingOneStyleAfterAnotherMatchesRenderingItAlone()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(64, 64);
+            PixelImage source = StyleTestFixtures.BuildGradient(64, 64);
 
             StyleDefinition realism = StyleRegistry.ByName("Realism");
             StyleDefinition other = StyleRegistry.All[StyleRegistry.All.Count - 1];
 
-            using Bitmap alone = StylePipeline.Render(
+            PixelImage alone = StylePipeline.Render(
                 source, paints, realism, 0, StylePipeline.DefaultValues(realism));
-            using Bitmap afterOther = StylePipeline.Render(
+            PixelImage afterOther = StylePipeline.Render(
                 source, paints, other, 0, StylePipeline.DefaultValues(other));
-            using Bitmap again = StylePipeline.Render(
+            PixelImage again = StylePipeline.Render(
                 source, paints, realism, 0, StylePipeline.DefaultValues(realism));
 
-            AssertBitmapsIdentical(alone, again);
+            AssertImagesIdentical(alone, again);
         }
 
         /// <summary>
@@ -263,17 +262,17 @@ namespace PaintTranslator.Tests
         public void MarkScaleMultipliesTheUserSlider()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.SixPaints();
-            using Bitmap source = StyleTestFixtures.BuildNoisyGradient(256, 256, 3.0);
+            PixelImage source = StyleTestFixtures.BuildNoisyGradient(256, 256, 3.0);
 
             StyleDefinition realism = StyleRegistry.ByName("Realism");
             StyleDefinition scaled = realism with { Name = "RealismAtSixTimesScale", MarkScale = 6.0 };
 
-            using Bitmap atSliderTwoScaleSix = StylePipeline.Render(
+            PixelImage atSliderTwoScaleSix = StylePipeline.Render(
                 source, paints, scaled, 2, StylePipeline.DefaultValues(scaled));
-            using Bitmap atSliderTwelveScaleOne = StylePipeline.Render(
+            PixelImage atSliderTwelveScaleOne = StylePipeline.Render(
                 source, paints, realism, 12, StylePipeline.DefaultValues(realism));
 
-            AssertBitmapsIdentical(atSliderTwoScaleSix, atSliderTwelveScaleOne);
+            AssertImagesIdentical(atSliderTwoScaleSix, atSliderTwelveScaleOne);
         }
 
         /// <summary>
@@ -281,8 +280,8 @@ namespace PaintTranslator.Tests
         /// source alpha, and captures it from the buffer before any
         /// <see cref="IPreMapStage"/> runs rather than reading it back out of a
         /// possibly stage-mutated buffer afterward — a deliberate choice recorded in
-        /// this method's own comments. Every other bitmap built in this file uses
-        /// <c>Color.FromArgb(255, ...)</c>, which is uniformly opaque and so cannot
+        /// this method's own comments. Every other image built in this file uses
+        /// <c>StyleTestFixtures.Argb(255, ...)</c>, which is uniformly opaque and so cannot
         /// exercise that choice at all: a bug that dropped alpha entirely, or read it
         /// from the wrong point in the pipeline, would still pass every other test
         /// here. This source gives every pixel a distinct alpha instead, so the
@@ -292,10 +291,10 @@ namespace PaintTranslator.Tests
         public void SourceAlphaIsPreservedExactly()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.ThreePaints();
-            using Bitmap source = BuildGradientBitmapWithVaryingAlpha(64, 64);
+            PixelImage source = BuildGradientWithVaryingAlpha(64, 64);
 
             StyleDefinition realism = StyleRegistry.ByName("Realism");
-            using Bitmap converted = StylePipeline.Render(
+            PixelImage converted = StylePipeline.Render(
                 source, paints, realism, 0, StylePipeline.DefaultValues(realism));
 
             int[] sourcePixels = StyleTestFixtures.ReadPixels(source, out int sourceStride);
@@ -323,12 +322,12 @@ namespace PaintTranslator.Tests
             StyleDefinition style = StyleRegistry.ByName("Realism");
             IReadOnlyDictionary<IPipelineStage, ParameterValues> values = StylePipeline.DefaultValues(style);
             CandidateSet prepared = StylePipeline.PrepareCandidates(paints, style, values);
-            using Bitmap source = StyleTestFixtures.BuildGradientBitmap(48, 32);
+            PixelImage source = StyleTestFixtures.BuildGradient(48, 32);
 
-            using Bitmap oneShot = StylePipeline.Render(source, paints, style, 3, values);
-            using Bitmap reused = StylePipeline.Render(source, paints, style, 3, values, prepared);
+            PixelImage oneShot = StylePipeline.Render(source, paints, style, 3, values);
+            PixelImage reused = StylePipeline.Render(source, paints, style, 3, values, prepared);
 
-            AssertBitmapsIdentical(oneShot, reused);
+            AssertImagesIdentical(oneShot, reused);
         }
 
         private sealed class CancellingStage : IPreMapStage
@@ -352,14 +351,14 @@ namespace PaintTranslator.Tests
         }
 
         /// <summary>
-        /// The same gradient as <see cref="StyleTestFixtures.BuildGradientBitmap"/>, but with a distinct,
+        /// The same gradient as <see cref="StyleTestFixtures.BuildGradient"/>, but with a distinct,
         /// non-255 alpha at nearly every pixel, so a test can tell whether the pipeline
         /// preserved each pixel's own source alpha rather than some constant or the
         /// wrong pixel's value.
         /// </summary>
-        private static Bitmap BuildGradientBitmapWithVaryingAlpha(int width, int height)
+        private static PixelImage BuildGradientWithVaryingAlpha(int width, int height)
         {
-            var bitmap = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+            var pixels = new int[width * height];
             for (int y = 0; y < height; y++)
             {
                 for (int x = 0; x < width; x++)
@@ -368,14 +367,14 @@ namespace PaintTranslator.Tests
                     int g = (y * 255) / (height - 1);
                     int b = ((x + y) * 255) / (width + height - 2);
                     int alpha = ((x * 7) + (y * 13)) % 256;
-                    bitmap.SetPixel(x, y, Color.FromArgb(alpha, r, g, b));
+                    pixels[(y * width) + x] = StyleTestFixtures.Argb(alpha, r, g, b);
                 }
             }
 
-            return bitmap;
+            return PixelImage.FromPixels(width, height, pixels);
         }
 
-        private static void AssertBitmapsIdentical(Bitmap expected, Bitmap actual)
+        private static void AssertImagesIdentical(PixelImage expected, PixelImage actual)
         {
             Assert.Equal(expected.Width, actual.Width);
             Assert.Equal(expected.Height, actual.Height);

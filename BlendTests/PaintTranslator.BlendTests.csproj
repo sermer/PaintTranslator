@@ -2,8 +2,9 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net5.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <RootNamespace>PaintTranslator.BlendTests</RootNamespace>
     <AssemblyName>PaintTranslator.BlendTests</AssemblyName>
   </PropertyGroup>

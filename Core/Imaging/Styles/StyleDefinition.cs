@@ -25,7 +25,7 @@ namespace PaintTranslator.Imaging.Styles
     /// <param name="Candidates">Slot 3: the candidate-set transform.</param>
     /// <param name="Quantiser">Slot 4: the candidate chooser.</param>
     /// <param name="PostMap">Slot 5: index-buffer stages, run in order after mapping.</param>
-    internal sealed record StyleDefinition(
+    public sealed record StyleDefinition(
         string Name,
         double MarkScale,
         IReadOnlyList<IPreMapStage> PreMap,

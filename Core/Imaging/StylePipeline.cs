@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.Threading;
 using System.Threading.Tasks;
 using PaintTranslator.Imaging.Styles;
@@ -22,12 +21,12 @@ namespace PaintTranslator.Imaging
     /// synthesise a colour outside the achievable gamut.
     /// </para>
     /// </summary>
-    internal static class StylePipeline
+    public static class StylePipeline
     {
         /// <summary>
         /// Renders a photo through one style: obtains that style's candidate set,
         /// filters and maps the pixel buffer through its stages in slot order, and
-        /// writes the result into a fresh bitmap. A caller may supply a prepared set;
+        /// wraps the result in a fresh image. A caller may supply a prepared set;
         /// otherwise this method builds one as before.
         /// </summary>
         /// <param name="source">The photo to convert; it is not modified.</param>
@@ -40,35 +39,14 @@ namespace PaintTranslator.Imaging
         /// the parameter values that stage should render with.</param>
         /// <param name="preparedCandidates">A palette-compatible set prepared by
         /// <see cref="PrepareCandidates"/>, or null to build it during this call.</param>
-        /// <returns>A new 32-bit ARGB bitmap, or null when cancellation is observed
-        /// during any cooperative rendering phase.</returns>
+        /// <returns>A new image, or null when cancellation is observed during any
+        /// cooperative rendering phase.</returns>
         /// <exception cref="ArgumentNullException">Thrown when <paramref name="source"/>,
         /// <paramref name="paints"/>, <paramref name="style"/> or <paramref name="values"/>
         /// is null.</exception>
         /// <exception cref="ArgumentException">Thrown when <paramref name="paints"/> is empty.</exception>
-        internal static Bitmap Render(
-            Bitmap source,
-            IReadOnlyList<PigmentCoefficients> paints,
-            StyleDefinition style,
-            int markPixels,
-            IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
-            CandidateSet preparedCandidates = null,
-            CancellationToken cancellationToken = default,
-            RenderDiagnostics diagnostics = null,
-            ColourMapCache colourMapCache = null)
-        {
-            if (source == null)
-            {
-                throw new ArgumentNullException(nameof(source));
-            }
-
-            return Render(
-                SourceFrame.Create(source), paints, style, markPixels, values,
-                preparedCandidates, cancellationToken, diagnostics, colourMapCache);
-        }
-
-        internal static Bitmap Render(
-            SourceFrame source,
+        public static PixelImage Render(
+            PixelImage source,
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
             int markPixels,
@@ -129,7 +107,7 @@ namespace PaintTranslator.Imaging
                 candidates.MaximumChroma,
                 cancellationToken);
 
-            Bitmap result = null;
+            PixelImage result = null;
             phaseStarted = diagnostics?.Begin() ?? 0L;
             int[] pixels = source.CopyPixels();
             int strideInts = width;
@@ -236,13 +214,10 @@ namespace PaintTranslator.Imaging
                 diagnostics?.End("Output: compose", phaseStarted);
 
                 phaseStarted = diagnostics?.Begin() ?? 0L;
-                result = source.CreateBitmap(pixels);
-                diagnostics?.End("Output: write bitmap", phaseStarted);
-            }
-            catch
-            {
-                result?.Dispose();
-                throw;
+                // pixels came from source.CopyPixels(), so handing the array to
+                // FromPixels transfers ownership rather than copying it again.
+                result = PixelImage.FromPixels(width, height, pixels);
+                diagnostics?.End("Output: wrap pixels", phaseStarted);
             }
             finally
             {
@@ -260,7 +235,7 @@ namespace PaintTranslator.Imaging
         /// This is separated from <see cref="Render"/> because it depends only on the
         /// chosen paints and the transform's build parameters, not on the image.
         /// </summary>
-        internal static CandidateSet PrepareCandidates(
+        public static CandidateSet PrepareCandidates(
             IReadOnlyList<PigmentCoefficients> paints,
             StyleDefinition style,
             IReadOnlyDictionary<IPipelineStage, ParameterValues> values,
@@ -307,7 +282,7 @@ namespace PaintTranslator.Imaging
         /// <paramref name="style"/>, each starting at that stage's own declared
         /// defaults and then adjusted by whichever of this style's
         /// <see cref="StyleDefinition.DefaultOverrides"/> name that stage.</returns>
-        internal static IReadOnlyDictionary<IPipelineStage, ParameterValues> DefaultValues(StyleDefinition style)
+        public static IReadOnlyDictionary<IPipelineStage, ParameterValues> DefaultValues(StyleDefinition style)
         {
             var values = new Dictionary<IPipelineStage, ParameterValues>();
             foreach (IPipelineStage stage in style.Stages)
@@ -332,7 +307,7 @@ namespace PaintTranslator.Imaging
         /// each <see cref="ParameterValues"/> are independent of the UI's live stores,
         /// so a worker observes one coherent frame even when another slider moves.
         /// </summary>
-        internal static IReadOnlyDictionary<IPipelineStage, ParameterValues> SnapshotValues(
+        public static IReadOnlyDictionary<IPipelineStage, ParameterValues> SnapshotValues(
             StyleDefinition style,
             IReadOnlyDictionary<IPipelineStage, ParameterValues> values)
         {

@@ -11,7 +11,7 @@ namespace PaintTranslator.Tests
         public void TraditionalWheelPlacesRedYellowAndBlueAtArtistPrimaryPositions()
         {
             const int diameter = 201;
-            using Bitmap wheel = ColorWheelGenerator.CreateTraditional(diameter);
+            PixelImage wheel = ColorWheelGenerator.CreateTraditional(diameter);
 
             AssertPrimary(wheel, artistAngle: 0.0, expected: "red");
             AssertPrimary(wheel, artistAngle: 120.0, expected: "yellow");
@@ -22,11 +22,11 @@ namespace PaintTranslator.Tests
         public void TraditionalWheelFadesToWhiteAtTheCentreAndIsTransparentOutside()
         {
             const int diameter = 201;
-            using Bitmap wheel = ColorWheelGenerator.CreateTraditional(diameter);
+            PixelImage wheel = ColorWheelGenerator.CreateTraditional(diameter);
 
-            Color centre = wheel.GetPixel(diameter / 2, diameter / 2);
+            Color centre = Color.FromArgb(wheel[diameter / 2, diameter / 2]);
             Assert.True(centre.R >= 250 && centre.G >= 250 && centre.B >= 250);
-            Assert.Equal(0, wheel.GetPixel(0, 0).A);
+            Assert.Equal(0, Color.FromArgb(wheel[0, 0]).A);
         }
 
         [Fact]
@@ -36,14 +36,14 @@ namespace PaintTranslator.Tests
                 () => ColorWheelGenerator.CreateTraditional(1));
         }
 
-        private static void AssertPrimary(Bitmap wheel, double artistAngle, string expected)
+        private static void AssertPrimary(PixelImage wheel, double artistAngle, string expected)
         {
             double centre = (wheel.Width - 1) * 0.5;
             double radius = wheel.Width * 0.40;
             double radians = (artistAngle - 90.0) * (Math.PI / 180.0);
             int x = (int)Math.Round(centre + (Math.Cos(radians) * radius));
             int y = (int)Math.Round(centre + (Math.Sin(radians) * radius));
-            Color colour = wheel.GetPixel(x, y);
+            Color colour = Color.FromArgb(wheel[x, y]);
 
             Assert.Equal(255, colour.A);
             switch (expected)

@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using PaintTranslator.Imaging;
 using PaintTranslator.Imaging.Styles;
@@ -110,8 +108,8 @@ namespace PaintTranslator.Tests
         {
             StyleDefinition style = StyleRegistry.ByName(styleName);
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.SixPaints();
-            using Bitmap source = StyleTestFixtures.BuildNoisyGradient(128, 128, 2.0);
-            using Bitmap converted = StylePipeline.Render(
+            PixelImage source = StyleTestFixtures.BuildNoisyGradient(128, 128, 2.0);
+            PixelImage converted = StylePipeline.Render(
                 source, paints, style, MarkPixels, StylePipeline.DefaultValues(style));
             string path = Path.Combine(GoldenDirectory, style.Name + ".png");
 
@@ -122,7 +120,7 @@ namespace PaintTranslator.Tests
 #pragma warning disable CS0162
             if (Regenerate)
             {
-                converted.Save(path, ImageFormat.Png);
+                PngCodec.Save(converted, path);
                 return;
             }
 #pragma warning restore CS0162
@@ -132,7 +130,7 @@ namespace PaintTranslator.Tests
                 $"no golden reference at {path} — set Regenerate = true, run this test once for " +
                 "every style, look at the five PNGs it writes, then set Regenerate back to false");
 
-            using var golden = new Bitmap(path);
+            PixelImage golden = PngCodec.Load(path);
             AssertPixelsIdentical(golden, converted, style.Name);
         }
 
@@ -157,24 +155,24 @@ namespace PaintTranslator.Tests
         public void RenderingEveryStyleInSequenceMatchesRenderingEachAlone()
         {
             IReadOnlyList<PigmentCoefficients> paints = StyleTestFixtures.SixPaints();
-            using Bitmap source = StyleTestFixtures.BuildNoisyGradient(128, 128, 2.0);
+            PixelImage source = StyleTestFixtures.BuildNoisyGradient(128, 128, 2.0);
             IReadOnlyList<StyleDefinition> styles = StyleRegistry.All;
 
             foreach (StyleDefinition style in styles)
             {
-                using Bitmap alone = StylePipeline.Render(
+                PixelImage alone = StylePipeline.Render(
                     source, paints, style, MarkPixels, StylePipeline.DefaultValues(style));
 
                 foreach (StyleDefinition other in styles)
                 {
                     if (!ReferenceEquals(other, style))
                     {
-                        using Bitmap discard = StylePipeline.Render(
+                        PixelImage discard = StylePipeline.Render(
                             source, paints, other, MarkPixels, StylePipeline.DefaultValues(other));
                     }
                 }
 
-                using Bitmap again = StylePipeline.Render(
+                PixelImage again = StylePipeline.Render(
                     source, paints, style, MarkPixels, StylePipeline.DefaultValues(style));
 
                 AssertPixelsIdentical(alone, again, style.Name);
@@ -182,7 +180,7 @@ namespace PaintTranslator.Tests
         }
 
         /// <summary>
-        /// Compares two bitmaps pixel for pixel and fails on the first mismatch
+        /// Compares two images pixel for pixel and fails on the first mismatch
         /// found while counting the rest, so a failure message names both where
         /// the images first diverged and how widespread the divergence is.
         /// </summary>
@@ -191,7 +189,7 @@ namespace PaintTranslator.Tests
         /// <param name="context">The style name, included in the failure message
         /// so a run across every style in a loop still identifies which one
         /// failed.</param>
-        private static void AssertPixelsIdentical(Bitmap expected, Bitmap actual, string context)
+        private static void AssertPixelsIdentical(PixelImage expected, PixelImage actual, string context)
         {
             Assert.True(
                 expected.Width == actual.Width && expected.Height == actual.Height,

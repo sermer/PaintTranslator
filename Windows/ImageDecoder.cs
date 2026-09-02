@@ -2,8 +2,9 @@ using System;
 using System.Drawing;
 using System.IO;
 using ImageMagick;
+using PaintTranslator.Imaging;
 
-namespace PaintTranslator.Imaging
+namespace PaintTranslator.Windows
 {
     /// <summary>
     /// Turns image files and raw image bytes into bitmaps the application can display,
