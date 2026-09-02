@@ -1,0 +1,106 @@
+@using Microsoft.AspNetCore.Components.Forms
+@using PaintTranslator.Web.Interop
+@using PaintTranslator.Web.Session
+@implements IDisposable
+@inject ConversionSession Session
+
+<div class="toolbar">
+    <label class="file-button primary">Open Photo
+        <InputFile OnChange="OnFileChanged" accept="@ImageLoader.AcceptList" disabled="@Session.ImageOperationInProgress" />
+    </label>
+    @* tabindex makes the div itself focusable; Safari on macOS does not focus a <button>
+       on click, so without an explicit focus on the container, Escape's keydown has
+       nothing focused beneath it to bubble from once the menu opens. *@
+    <div class="menu" tabindex="-1" @ref="menuElement" @onkeydown="OnMenuKey">
+        <button @onclick="ToggleWheelMenu" disabled="@Session.ImageOperationInProgress">Color Wheel ▾</button>
+        @if (wheelMenu)
+        {
+            @* A full-viewport transparent layer under the items: any click that is not on an
+               item lands here and closes the menu, without a document-level listener in JS. *@
+            <div class="menu-backdrop" @onclick="() => wheelMenu = false"></div>
+            <div class="menu-items">
+                <button @onclick="() => Pick(WheelDisplay.Traditional)">Traditional</button>
+                <button @onclick="() => Pick(WheelDisplay.SelectedPaints)">Selected Golden Paints</button>
+                <button @onclick="() => { Session.ShowPhoto(); wheelMenu = false; }" disabled="@(Session.Wheel == WheelDisplay.None)">Back to photo</button>
+            </div>
+        }
+    </div>
+    <label>Grid <input type="number" min="1" max="200" value="@Session.GridColumns" @onchange="e => Session.SetGrid(Clamp(e), Session.GridRows, Session.ShowGrid)" /></label>
+    <label>Rows <input type="number" min="1" max="200" value="@Session.GridRows" @onchange="e => Session.SetGrid(Session.GridColumns, Clamp(e), Session.ShowGrid)" /></label>
+    <label><input type="checkbox" checked="@Session.ShowGrid" @onchange="e => Session.SetGrid(Session.GridColumns, Session.GridRows, (bool)e.Value!)" /> Show grid</label>
+    <button class="@(Session.MagnifierActive ? "toggle on" : "toggle")" @onclick="() => Session.SetMagnifier(!Session.MagnifierActive)">🔍 Zoom</button>
+    <span class="spacer"></span>
+    <button @onclick="Download" disabled="@(Session.Displayed == null || Session.Displayed == Session.SourcePhoto)">Download PNG</button>
+    <span class="title">@Session.Title</span>
+</div>
+
+@code {
+    private bool wheelMenu;
+    private ElementReference menuElement;
+    private bool focusMenuPending;
+    [Parameter] public EventCallback<(byte[] Bytes, string Name)> FileChosen { get; set; }
+
+    /// <summary>Raised instead of FileChosen when the read itself fails (the file exceeds
+    /// OnFileChanged's maxAllowedSize, or some other IO failure) — there are no bytes to
+    /// hand FileChosen, and without this arm the exception previously escaped OnFileChanged
+    /// entirely, past LoadBytes' own catches, since LoadBytes is never reached.</summary>
+    [Parameter] public EventCallback<string> FileFailed { get; set; }
+
+    protected override void OnInitialized() => Session.Changed += OnSessionChanged;
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+
+    private void Pick(WheelDisplay kind) { Session.ShowWheel(kind); wheelMenu = false; }
+    private void OnMenuKey(KeyboardEventArgs e) { if (e.Key == "Escape") wheelMenu = false; }
+    private static int Clamp(ChangeEventArgs e) => Math.Clamp(int.TryParse((string?)e.Value, out int v) ? v : 2, 1, 200);
+
+    private void ToggleWheelMenu()
+    {
+        wheelMenu = !wheelMenu;
+        if (wheelMenu) focusMenuPending = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (focusMenuPending)
+        {
+            focusMenuPending = false;
+            await menuElement.FocusAsync();
+        }
+    }
+
+    private async Task OnFileChanged(InputFileChangeEventArgs e)
+    {
+        byte[] bytes;
+        try
+        {
+            using var stream = e.File.OpenReadStream(maxAllowedSize: 512L * 1024 * 1024);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer);
+            bytes = buffer.ToArray();
+        }
+        catch (Exception ex)
+        {
+            // This read happens before LoadBytes, so LoadBytes' own catches never see it;
+            // an oversized file throws IOException here with Blazor's own wording ("Supplied
+            // file with size ... exceeds the maximum of ... bytes"), which is translated to
+            // plain English rather than shown to the user verbatim.
+            Console.Error.WriteLine(ex);
+            string reason = ex is IOException && ex.Message.Contains("exceeds the maximum", StringComparison.OrdinalIgnoreCase)
+                ? "the file is larger than 512 MB"
+                : "an unexpected error occurred";
+            await FileFailed.InvokeAsync($"Could not open '{e.File.Name}': {reason}");
+            return;
+        }
+        await FileChosen.InvokeAsync((bytes, e.File.Name));
+    }
+
+    private void Download()
+    {
+        string stem = Session.Wheel != WheelDisplay.None
+            ? "colour-wheel"
+            : $"{System.IO.Path.GetFileNameWithoutExtension(Session.PhotoName ?? "image")}-{Session.Style.Name.ToLowerInvariant().Replace(' ', '-')}";
+        CanvasInterop.DownloadPng(ImageCanvas.CanvasId, stem + ".png");
+    }
+
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+}

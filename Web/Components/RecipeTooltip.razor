@@ -1,0 +1,25 @@
+@if (At != null && Lines != null)
+{
+    <div class="recipe-tooltip" style="@Position()">
+        @foreach (string line in Lines) { <div>@line</div> }
+    </div>
+}
+
+@code {
+    private const int Offset = 16;
+    [Parameter] public System.Drawing.Point? At { get; set; }
+    [Parameter] public string[]? Lines { get; set; }
+    [Parameter] public int HostWidth { get; set; }
+    [Parameter] public int HostHeight { get; set; }
+
+    // Flip to the other side of the cursor near the right and bottom edges, as
+    // MainForm.GetBlendTooltipBounds does; sizes are estimated from line count.
+    private string Position()
+    {
+        int width = 260, height = (Lines!.Length * 18) + 12;
+        int x = At!.Value.X + Offset, y = At.Value.Y + Offset;
+        if (x + width > HostWidth) x = At.Value.X - Offset - width;
+        if (y + height > HostHeight) y = At.Value.Y - Offset - height;
+        return $"left:{x}px;top:{y}px";
+    }
+}

@@ -1,0 +1,70 @@
+@using PaintTranslator.Pigments
+@using PaintTranslator.Web.Session
+
+@if (Open)
+{
+    <div class="modal-backdrop">
+        <div class="modal palette-editor">
+            <h2>Edit Palette</h2>
+            <label class="select-all-row">
+                <input type="checkbox" checked="@(chosen.Count == Catalogue.Count)" @onchange="e => ToggleAll((bool)e.Value!)" /> Select all
+            </label>
+            <div class="catalogue">
+            @foreach (var group in PaintFamilies.Group(Catalogue))
+            {
+                <div class="family">@group.Family</div>
+                @foreach (PigmentCoefficients paint in group.Paints)
+                {
+                    <label class="paint-row">
+                        <input type="checkbox" checked="@chosen.Contains(paint.Name)" @onchange="e => Toggle(paint.Name, (bool)e.Value!)" />
+                        <span class="swatch" style="background:@PaintSwatch.Css(paint)"></span>
+                        <span>@paint.Name</span>
+                    </label>
+                }
+            }
+            </div>
+            @if (refusal != null) { <div class="error">@refusal</div> }
+            <div class="buttons">
+                <button class="ok primary" @onclick="Ok">OK</button>
+                <button class="cancel" @onclick="OnCancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private HashSet<string> chosen = new();
+    private string? refusal;
+    private bool wasOpen;
+
+    [Parameter, EditorRequired] public IReadOnlyList<PigmentCoefficients> Catalogue { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyCollection<string> Current { get; set; } = default!;
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback<IReadOnlyList<string>> OnApply { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+
+    // Resetting `chosen` from Current on every render while open would discard the
+    // user's own clicks the moment any parameter changed for an unrelated reason;
+    // only the closed-to-open transition should re-seed it.
+    protected override void OnParametersSet()
+    {
+        if (Open && !wasOpen) { chosen = new HashSet<string>(Current, StringComparer.Ordinal); refusal = null; }
+        wasOpen = Open;
+    }
+
+    // Clearing the refusal here (not just on Ok) means ticking a box after a refused
+    // "select at least one paint" empties the error the moment the user starts fixing it,
+    // rather than leaving stale text on screen until the next OK attempt.
+    private void Toggle(string name, bool on) { if (on) chosen.Add(name); else chosen.Remove(name); refusal = null; }
+    private void ToggleAll(bool on) { chosen = on ? Catalogue.Select(p => p.Name).ToHashSet(StringComparer.Ordinal) : new(); refusal = null; }
+
+    private Task Ok()
+    {
+        if (chosen.Count == 0)
+        {
+            refusal = "Select at least one paint.";
+            return Task.CompletedTask;
+        }
+        return OnApply.InvokeAsync(Catalogue.Select(p => p.Name).Where(chosen.Contains).ToList());
+    }
+}

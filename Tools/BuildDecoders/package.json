@@ -1,0 +1,10 @@
+{
+  "name": "painttranslator-build-decoders",
+  "private": true,
+  "devDependencies": {
+    "@webtoon/psd": "0.4.0",
+    "esbuild": "0.24.0",
+    "libheif-js": "1.18.2",
+    "utif": "3.1.0"
+  }
+}

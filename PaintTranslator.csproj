@@ -59,6 +59,12 @@
     <Compile Remove="Tests.Windows\**" />
     <EmbeddedResource Remove="Tests.Windows\**" />
     <None Remove="Tests.Windows\**" />
+    <Compile Remove="Web\**" />
+    <EmbeddedResource Remove="Web\**" />
+    <None Remove="Web\**" />
+    <Compile Remove="Tests.Web\**" />
+    <EmbeddedResource Remove="Tests.Web\**" />
+    <None Remove="Tests.Web\**" />
     <!-- The offline coefficient ingest is its own console project and must never be
          compiled into the application. -->
     <Compile Remove="Tools\**" />

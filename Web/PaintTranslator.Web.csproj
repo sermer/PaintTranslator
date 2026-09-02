@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The [JSImport]/[JSMarshalAs<JSType.MemoryView>] source generator in
+         CanvasInterop emits unsafe code to pass the pixel buffer as a raw view
+         instead of copying it through JSON. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>PaintTranslator.Web</RootNamespace>
+    <AssemblyName>PaintTranslator.Web</AssemblyName>
+    <!-- Without this, publish leaves the literal "#[.{fingerprint}]" placeholder in
+         index.html's boot-script src; a real host's static-asset middleware rewrites
+         that at request time, but Web/serve.py just returns file bytes, so the
+         placeholder must be baked into the file at publish time instead. -->
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <!-- The kernel formats nothing culture-specific; dropping ICU removes ~1.5 MB
+         from the download and is required for the smallest relinked runtime. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- AOT only on publish: the interpreter is several times slower on the
+         mixing kernel (spike, Task 3), and a Debug run is for UI work only. -->
+    <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation>
+    <WasmStripILAfterAOT Condition="'$(Configuration)' == 'Release'">true</WasmStripILAfterAOT>
+    <!-- Set to true only if the spike adopts configuration B (see the spec). The
+         launcher reads this line to decide whether to send isolation headers. -->
+    <WasmEnableThreads>false</WasmEnableThreads>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.11" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.11" PrivateAssets="all" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <ProjectReference Include="..\Core\PaintTranslator.Core.csproj" />
+  </ItemGroup>
+
+</Project>

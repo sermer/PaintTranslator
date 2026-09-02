@@ -1,0 +1,84 @@
+@page "/bench"
+@using PaintTranslator.Web.Session
+@inject IJSRuntime Js
+@inject NavigationManager Nav
+
+<h1>Bench</h1>
+<p>
+    Processors: @Environment.ProcessorCount ·
+    SharedArrayBuffer: @(sharedArrayBuffer?.ToString() ?? "?") ·
+    Iterations: <input type="number" @bind="iterations" min="1" max="9" style="width:3em" />
+    <button @onclick="RunAsync" disabled="@running">Run</button>
+</p>
+@if (rows.Count > 0)
+{
+    <table>
+        <thead><tr><th>Style</th><th>Preview ms</th><th>Full 1920×1080 ms</th><th>Checksum</th></tr></thead>
+        <tbody>
+        @foreach (BenchRow row in rows)
+        {
+            <tr><td>@row.Style</td><td>@row.PreviewMs.ToString("F0")</td><td>@row.FullMs.ToString("F0")</td><td>@row.FullChecksum.ToString("X16")</td></tr>
+        }
+        </tbody>
+    </table>
+}
+<pre>@log</pre>
+
+@code {
+    private readonly List<BenchRow> rows = new();
+    private string log = "";
+    private int iterations = 3;
+    private bool running;
+    private bool? sharedArrayBuffer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        sharedArrayBuffer = await Js.InvokeAsync<bool>("eval", "typeof SharedArrayBuffer !== 'undefined'");
+
+        // The controller running this spike has no browser to click in - it drives
+        // headless Chrome and greps stdout for the BENCH START/DONE markers below -
+        // so ?autorun=<N> must reach the same run the button starts, unattended.
+        int? autorun = ParseAutorunIterations();
+        if (autorun is int n)
+        {
+            iterations = n;
+            await RunAsync();
+        }
+    }
+
+    private int? ParseAutorunIterations()
+    {
+        string query = new Uri(Nav.Uri).Query;
+        if (string.IsNullOrEmpty(query))
+        {
+            return null;
+        }
+        foreach (string pair in query.TrimStart('?').Split('&'))
+        {
+            string[] parts = pair.Split('=', 2);
+            if (parts.Length == 2 && parts[0] == "autorun"
+                && int.TryParse(parts[1], out int n) && n is >= 1 and <= 9)
+            {
+                return n;
+            }
+        }
+        return null;
+    }
+
+    private async Task RunAsync()
+    {
+        running = true;
+        rows.Clear();
+        log = "";
+        StateHasChanged();
+        await Task.Yield();
+        Console.WriteLine($"BENCH START processors={Environment.ProcessorCount} sharedArrayBuffer={sharedArrayBuffer}");
+        rows.AddRange(BenchRunner.Run(1920, 1080, iterations, line =>
+        {
+            log += line + "\n";
+            Console.WriteLine(line);
+        }));
+        Console.WriteLine("BENCH DONE");
+        running = false;
+    }
+}

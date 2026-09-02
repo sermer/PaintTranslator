@@ -39,8 +39,18 @@ when adding to them, and check the warnings before quoting a figure.
 dotnet build PaintTranslator.sln                      # builds all projects, on macOS too
 dotnet test Tests/PaintTranslator.Tests.csproj        # the cross-platform suite
 dotnet test Tests.Windows/PaintTranslator.Windows.Tests.csproj   # 12 GDI/WinForms tests, Windows only
+dotnet test Tests.Web/PaintTranslator.Web.Tests.csproj   # bUnit + session tests, cross-platform
 dotnet run --project PaintTranslator.csproj           # the WinForms app, Windows only
+dotnet run --project Web/PaintTranslator.Web.csproj      # the web app, Debug, dev server
+./PaintTranslator.command                                # Release publish + local serve + open browser
+Tools/BuildDecoders/build.sh                             # regenerates Web/wwwroot/js/decoders (needs Node; offline after first install)
+Tools/Deploy/deploy.sh                                   # Docker: clean static site in deploy/site + painttranslator:latest (Caddy) image
 ```
+
+If macOS refuses to open `PaintTranslator.command` from Finder (unidentified developer),
+run `xattr -d com.apple.quarantine PaintTranslator.command` once; that clears the
+quarantine flag Gatekeeper sets on files it hasn't seen before, and double-clicking works
+from then on.
 
 Run a single test or class with a filter:
 
@@ -78,6 +88,55 @@ between `Bitmap` and Core's `PixelImage`, `Windows/ImageDecoder` wraps GDI and M
 and `Windows/GridOverlayRenderer` strokes `GridGeometry`. Nothing under `Core/` may
 reference `System.Drawing.Common`; `System.Drawing.Primitives` (`Color`, `Point`, `Size`)
 is fine.
+
+### Web app
+
+`Web/` is the Blazor WebAssembly consumer of Core, standalone and statically hosted, kept
+at feature parity with the WinForms app rather than as a subset. `Web/Session` is the
+UI-neutral port of `MainForm` — scheduler, session, formatter, codec — with no Blazor or
+browser types in it, so it is covered by ordinary xUnit tests instead of bUnit.
+`wwwroot/js/interop.js` is decision-free glue: it marshals canvas pixels and file bytes
+across the JS boundary and makes no choices `Web/Session` doesn't already make. The image
+decoders for formats the browser can't read natively (HEIC, PSD, TIFF) are vendored under
+`wwwroot/js/decoders/`, each under its own licence recorded in
+`wwwroot/js/decoders/LICENSES.md`; `Tools/BuildDecoders/build.sh` regenerates that bundle
+from `package.json` and needs Node only for that regeneration, not to run the app. The
+threading configuration (`WasmEnableThreads` in the csproj) and the perf-spike numbers
+that chose it are in `docs/superpowers/specs/2026-09-01-blazor-app-design.md`; the current
+setting is `false` (approach A, AOT without threads), so switching it to `true` needs a
+clean `Web/obj/Release` before the next publish or the relinked runtime silently keeps the
+old thread configuration. The csproj also sets `OverrideHtmlAssetPlaceholders=true`, so a
+static publish resolves the boot-script placeholder in `index.html` and fingerprints every
+`_framework/*` file (`dotnet.<hash>.js`, `dotnet.native.<hash>.wasm`, and so on) — nothing
+in a curl check, a doc, or a script may hard-code a literal `_framework/dotnet.js` path;
+glob for it (a .NET 10 publish emits no `blazor.boot.json`; the boot manifest is embedded
+in the fingerprinted `dotnet.<hash>.js`).
+
+`PaintTranslator.command` is the Mac launcher: it publishes Release (AOT; a Debug/interpreted
+build is for UI work only, not for judging performance), then serves `wwwroot` with
+`Web/serve.py` — a small `http.server` subclass that adds the WASM/brotli MIME types, brotli
+negotiation, the cross-origin isolation headers `WasmEnableThreads=true` would need, and a
+single-page-app fallback that serves `index.html` for extensionless paths matching no file
+(client-side routes like `/bench`), while a missing file that has an extension still 404s so
+a broken asset link stays visible. `Web/bin/publish` is the launcher's own output directory,
+git-ignored via the top-level `bin/` rule. Two routes exist for diagnostics rather than
+end-user use: `/bench` is the spike harness (`?autorun=N` runs N iterations headlessly), and
+`?autofile=<path>` on the main page loads a file from the site root through the normal
+pipeline and logs `HOST TITLE`/`HOST ERROR` lines to the console, which is how headless
+Chrome verifies a build without a human clicking through it.
+
+Deployment is host-neutral and lives in `Tools/Deploy/`: a three-stage `Dockerfile`
+(SDK + `wasm-tools` publish → `scratch` export → `caddy:2-alpine`), the `Caddyfile` that
+does what `Web/serve.py` does for the launcher plus the caching split (`/_framework/*`
+immutable for a year because every file there is fingerprinted; everything else
+`no-cache`), and `deploy.sh`, which exports the `site` stage to `deploy/site/` (deleted
+first, so it is always clean, and git-ignored) and tags the `serve` stage
+`painttranslator:latest`. The publish runs inside Docker so the folder and the image
+come from one AOT compile and the Mac needs Docker but not `wasm-tools` to deploy;
+`Tools/Deploy/README.md` covers uploading the folder, running the image and getting
+HTTPS from Caddy on a rented server. The Credits dialog (`Web/Components/CreditsDialog.razor`)
+lists the vendored decoders from `Web/Session/VendoredLibrary.cs`, and `CreditsTests`
+asserts that list matches `wwwroot/js/decoders/LICENSES.md`, so a decoder bump must touch both.
 
 ### The spectral pipeline
 
@@ -133,9 +192,11 @@ depends on *position* rather than colour breaks that cache and needs the key ext
 ## Tests
 
 xUnit. `Tests/` targets `net10.0` and runs cross-platform; `Tests.Windows/` targets
-`net10.0-windows` and holds only the GDI/WinForms-dependent tests. Package versions were
-pinned to the last releases targeting `net5.0` while the whole suite ran under it — now
-historical, since both test projects moved to `net10.0`.
+`net10.0-windows` and holds only the GDI/WinForms-dependent tests. `Tests.Web/` is the
+third test project, covering `Web/` — bUnit for the Razor components and plain xUnit for
+`Web/Session`, both cross-platform since nothing in `Web/` needs Windows. Package versions
+were pinned to the last releases targeting `net5.0` while the whole suite ran under it —
+now historical, since both test projects moved to `net10.0`.
 
 Three tests are structurally unusual and worth knowing before editing them:
 
@@ -155,7 +216,13 @@ Three tests are structurally unusual and worth knowing before editing them:
 
 `Tests/PaintTranslator.Tests.csproj` is 403 tests and runs cross-platform, including on
 this Mac. Golden PNGs are read through `Tests/PngCodec.cs` (ImageSharp) rather than GDI, so
-they stay comparable on both platforms.
+they stay comparable on both platforms. The Web port added `Tests.Web/` (82 tests) rather
+than growing this count; `Tests/` stays at 403.
+
+`Tests.Web`'s scheduler and session tests (`RenderSchedulerTests`, `ConversionSessionTests`)
+use a manual delay double instead of real timers, and assert by waiting for the
+`Idle`/title events the scheduler and session already raise on completion — not by sleeping
+a fixed duration — so they run at full speed and don't flake under load.
 
 `Tests` compiles `GoldenSpectraSource.cs` and `SpreadsheetReader.cs` from the ingest tool
 directly, so the derivation is tested rather than only its output. Core grants

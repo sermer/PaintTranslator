@@ -1,6 +1,8 @@
 bin/
 obj/
 *.user
+Tools/BuildDecoders/node_modules/
+Tools/BuildDecoders/package-lock.json
 /.vs
 /.vs
 /docs/*
@@ -11,3 +13,4 @@ obj/
 /.vs
 /.vs
 !/docs/superpowers
+/deploy/

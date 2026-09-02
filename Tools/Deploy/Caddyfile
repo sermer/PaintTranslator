@@ -1,0 +1,36 @@
+# What Web/serve.py does for the launcher, for Caddy. serve.py is the local
+# reference; this file must keep doing the same four things plus caching.
+:80 {
+	root * /srv
+
+	# Client-side routes (/bench) arrive on reload as requests for files that do not
+	# exist. Hand back index.html only when the path has no extension, so a missing
+	# .js or .wasm still 404s and a broken asset link stays visible.
+	@route {
+		not file
+		not path *.*
+	}
+	rewrite @route /index.html
+
+	# Everything under _framework is fingerprinted at publish time
+	# (OverrideHtmlAssetPlaceholders): a republish changes the names, so the old
+	# entries are never requested again and a year-long immutable cache is safe.
+	# index.html, css/ and js/ are not fingerprinted and must be revalidated on
+	# every load, which is what no-cache (not no-store) asks for.
+	@fingerprinted path /_framework/*
+	header @fingerprinted Cache-Control "public, max-age=31536000, immutable"
+	@plain not path /_framework/*
+	header @plain Cache-Control "no-cache"
+
+	# Only with <WasmEnableThreads>true</WasmEnableThreads> in Web/PaintTranslator.Web.csproj:
+	# SharedArrayBuffer needs cross-origin isolation. The launcher reads the csproj at
+	# run time and adds these itself; a Caddyfile cannot, so this is a manual switch.
+	# header Cross-Origin-Opener-Policy "same-origin"
+	# header Cross-Origin-Embedder-Policy "require-corp"
+
+	# Serves foo.wasm.br as foo.wasm with Content-Encoding: br when the browser accepts
+	# it (gzip otherwise), which is what dotnet publish emits and serve.py negotiates.
+	file_server {
+		precompressed br gzip
+	}
+}

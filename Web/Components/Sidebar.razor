@@ -1,0 +1,42 @@
+@using PaintTranslator.Imaging.Styles
+@using PaintTranslator.Web.Session
+@implements IDisposable
+@inject ConversionSession Session
+
+<aside class="sidebar" aria-disabled="@(Session.ImageOperationInProgress ? "true" : "false")">
+    <div class="button-row">
+        <button disabled="@Session.ImageOperationInProgress" @onclick="() => editorOpen = true">Edit Palette</button>
+        <button @onclick="() => creditsOpen = true">Credits</button>
+    </div>
+    @if (Session.PaletteSaveFailed)
+    {
+        <div class="error banner" role="alert">
+            <span>Could not save your palette, so it won't be remembered next time.</span>
+            <button class="dismiss" aria-label="Dismiss" @onclick="Session.DismissPaletteSaveWarning">×</button>
+        </div>
+    }
+    <PaintList Paints="Session.AvailablePaints" Selected="Session.SelectedPaints" SelectedChanged="s => Session.SetSelectedPaints(s)" Disabled="Session.ImageOperationInProgress" />
+    <StylePanel Style="Session.Style" Values="Session.ValuesFor(Session.Style)" OnChange="v => Session.SetParameter(v.Stage, v.Id, v.Value)" Disabled="Session.ImageOperationInProgress" />
+    <button disabled="@Session.ImageOperationInProgress" @onclick="Session.ResetActiveStyle">Reset to defaults</button>
+    <label>Style
+        <select value="@Session.Style.Name" disabled="@Session.ImageOperationInProgress" @onchange="e => Session.SetStyle((string)e.Value!)">
+            @foreach (StyleDefinition style in StyleRegistry.All) { <option value="@style.Name">@style.Name</option> }
+        </select>
+    </label>
+    <label class="slider"><span>Brush mark: @Session.MarkPixels px</span>
+        <input type="range" min="@ConversionSession.MarkMinimum" max="@ConversionSession.MarkMaximum" value="@Session.MarkPixels" disabled="@Session.ImageOperationInProgress" @oninput="e => Session.SetMark(int.Parse((string)e.Value!))" /></label>
+    <label class="slider"><span>@(Session.BlurRadius == 0 ? "Blur: off" : $"Blur: {Session.BlurRadius} px")</span>
+        <input type="range" min="@ConversionSession.BlurMinimum" max="@ConversionSession.BlurMaximum" value="@Session.BlurRadius" disabled="@Session.ImageOperationInProgress" @oninput="e => Session.SetBlur(int.Parse((string)e.Value!))" /></label>
+    <PaletteEditorDialog Catalogue="PaintTranslator.Pigments.PigmentLibrary.Selectable" Current="Session.AvailablePaints.Select(p => p.Name).ToList()"
+        Open="editorOpen" OnApply="Apply" OnCancel="() => editorOpen = false" />
+    <CreditsDialog Open="creditsOpen" OnClose="() => creditsOpen = false" />
+</aside>
+
+@code {
+    private bool editorOpen;
+    private bool creditsOpen;
+    protected override void OnInitialized() => Session.Changed += OnSessionChanged;
+    private void OnSessionChanged() => InvokeAsync(StateHasChanged);
+    private void Apply(IReadOnlyList<string> names) { Session.ApplyPalette(names); editorOpen = false; }
+    public void Dispose() => Session.Changed -= OnSessionChanged;
+}

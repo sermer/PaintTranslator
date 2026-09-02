@@ -1,0 +1,33 @@
+@using PaintTranslator.Web.Session
+
+@if (Open)
+{
+    <div class="modal-backdrop">
+        <div class="modal credits">
+            <h2>Credits</h2>
+            <ul class="credits-list">
+                @foreach (VendoredLibrary lib in Credits.All)
+                {
+                    <li class="credit">
+                        <a href="@lib.Url" target="_blank" rel="noopener">@lib.Name</a>
+                        <span class="version">@lib.Version</span>
+                        <span class="licence">@lib.Licence</span>
+                    </li>
+                }
+            </ul>
+            <p class="credits-note">
+                libheif-js is LGPL-3.0. It is loaded unmodified as a separate script
+                (<code>js/decoders/libheif-bundle.js</code>), so it can be replaced with another
+                build of the same library without touching the rest of the app.
+            </p>
+            <div class="buttons">
+                <button class="close primary" @onclick="OnClose">Close</button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Open { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+}

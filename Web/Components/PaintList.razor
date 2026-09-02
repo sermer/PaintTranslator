@@ -1,0 +1,50 @@
+@using PaintTranslator.Pigments
+@using PaintTranslator.Web.Session
+
+<div class="paint-list">
+    <label class="select-all-row">
+        <input type="checkbox" class="select-all" checked="@(selection.Count == Paints.Count)" disabled="@Disabled" @onchange="e => ToggleAll((bool)e.Value!)" />
+        Select all
+    </label>
+    @foreach (var group in PaintFamilies.Group(Paints))
+    {
+        <div class="family">@group.Family</div>
+        @foreach (PigmentCoefficients paint in group.Paints)
+        {
+            <label class="paint-row">
+                <input type="checkbox" class="paint" checked="@selection.Contains(paint)" disabled="@Disabled" @onchange="e => Toggle(paint, (bool)e.Value!)" />
+                <span class="swatch" style="background:@PaintSwatch.Css(paint)"></span>
+                <span>@paint.Name</span>
+            </label>
+        }
+    }
+</div>
+
+@code {
+    // Tracked locally, not read straight off Selected, because the select-all checkbox
+    // must clear the instant one paint is unchecked: the parent has not re-rendered
+    // with a smaller Selected yet when this handler runs, so a parameter-only read
+    // would still see every paint checked.
+    private HashSet<PigmentCoefficients> selection = new();
+
+    [Parameter, EditorRequired] public IReadOnlyList<PigmentCoefficients> Paints { get; set; } = default!;
+    [Parameter, EditorRequired] public IReadOnlyList<PigmentCoefficients> Selected { get; set; } = default!;
+    [Parameter] public EventCallback<IReadOnlyList<PigmentCoefficients>> SelectedChanged { get; set; }
+    [Parameter] public bool Disabled { get; set; }
+
+    protected override void OnParametersSet() => selection = new HashSet<PigmentCoefficients>(Selected);
+
+    // Grouping is display only: selections are reported in Paints' own order, which is
+    // the order the session and the colour wheel use.
+    private Task Toggle(PigmentCoefficients paint, bool on)
+    {
+        if (on) { selection.Add(paint); } else { selection.Remove(paint); }
+        return SelectedChanged.InvokeAsync(Paints.Where(selection.Contains).ToList());
+    }
+
+    private Task ToggleAll(bool on)
+    {
+        selection = on ? new HashSet<PigmentCoefficients>(Paints) : new HashSet<PigmentCoefficients>();
+        return SelectedChanged.InvokeAsync(on ? Paints.ToList() : Array.Empty<PigmentCoefficients>());
+    }
+}

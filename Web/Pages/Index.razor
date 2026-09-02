@@ -1,0 +1,18 @@
+@page "/"
+@using PaintTranslator.Web.Components
+@using PaintTranslator.Web.Session
+@implements IDisposable
+@inject ConversionSession Session
+@inject NavigationManager Nav
+@inject IJSRuntime Js
+
+<PageTitle>@Session.Title</PageTitle>
+<div class="app">
+    <Toolbar FileChosen="f => LoadBytes(f.Bytes, f.Name)" FileFailed="msg => error = msg" />
+    <div class="canvas-column">
+        <ImageCanvas HoverChanged="h => hover = h" Resized="r => { hostWidth = r.Width; hostHeight = r.Height; }" />
+        <RecipeTooltip At="hover.At" Lines="hover.Lines" HostWidth="hostWidth" HostHeight="hostHeight" />
+        @if (error != null) { <div class="toast error" @onclick="() => error = null">@error</div> }
+    </div>
+    <Sidebar />
+</div>

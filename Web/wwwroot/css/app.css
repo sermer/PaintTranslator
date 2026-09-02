@@ -1,0 +1,365 @@
+:root {
+    --window: #0f1217;
+    --canvas: #0a0c10;
+    --surface: #171c24;
+    --surface-raised: #1f252f;
+    --surface-hover: #2a323f;
+    --border: #394251;
+    --text: #ebeef4;
+    --text-muted: #9ea9b9;
+    --accent: #d6a64e;
+    --accent-hover: #e7b962;
+    --accent-pressed: #b8893a;
+    --selection: #37465b;
+}
+
+body {
+    background: var(--window);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, "Segoe UI", system-ui, sans-serif;
+    margin: 0;
+    min-width: 900px;
+    min-height: 600px;
+}
+
+.app {
+    display: grid;
+    grid-template-rows: 64px 1fr;
+    grid-template-columns: 1fr 300px;
+    height: 100vh;
+}
+
+.sidebar {
+    overflow: auto;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.paint-list {
+    flex: 1;
+    min-height: 120px;
+    overflow: auto;
+}
+
+.sidebar[aria-disabled="true"] {
+    opacity: .6;
+}
+
+.swatch {
+    display: inline-block;
+    flex: none;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--border);
+    margin: 0 6px;
+    vertical-align: middle;
+}
+
+/* A label is inline by default, so without this the paint rows flowed across the
+   sidebar like words in a paragraph and wrapped wherever the width ran out. One
+   row per line, never wrapping; the containers scroll instead. */
+.paint-row,
+.select-all-row {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+    padding: 2px 0;
+}
+
+    .paint-row > span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+.family {
+    margin: 8px 0 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+button {
+    background: var(--surface-raised);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font: inherit;
+}
+
+    button:hover {
+        background: var(--surface-hover);
+    }
+
+    button.primary {
+        background: var(--accent);
+        color: var(--window);
+        border-color: var(--accent);
+    }
+
+        button.primary:hover {
+            background: var(--accent-hover);
+        }
+
+        button.primary:active {
+            background: var(--accent-pressed);
+        }
+
+input[type=range] {
+    accent-color: var(--accent);
+    width: 100%;
+}
+
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .6);
+    display: grid;
+    place-content: center;
+}
+
+.modal {
+    width: 420px;
+    max-height: 620px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+}
+
+.catalogue {
+    overflow: auto;
+    flex: 1;
+}
+
+.error {
+    color: #f28b82;
+}
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: lightyellow;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }
+
+.loading-progress {
+    position: absolute;
+    display: block;
+    width: 8rem;
+    height: 8rem;
+    inset: 20vh 0 auto 0;
+    margin: 0 auto 0 auto;
+}
+
+    .loading-progress circle {
+        fill: none;
+        stroke: #e0e0e0;
+        stroke-width: 0.6rem;
+        transform-origin: 50% 50%;
+        transform: rotate(-90deg);
+    }
+
+        .loading-progress circle:last-child {
+            stroke: #1b6ec2;
+            stroke-dasharray: calc(3.141 * var(--blazor-load-percentage, 0%) * 0.8), 500%;
+            transition: stroke-dasharray 0.05s ease-in-out;
+        }
+
+.loading-progress-text {
+    position: absolute;
+    text-align: center;
+    font-weight: bold;
+    inset: calc(20vh + 3.25rem) 0 auto 0.2rem;
+}
+
+    .loading-progress-text:after {
+        content: var(--blazor-load-percentage-text, "Loading");
+    }
+
+.canvas-host { position: relative; width: 100%; height: 100%; background: #0a0c10; }
+.canvas-host canvas { width: 100%; height: 100%; display: block; touch-action: none; }
+.canvas-host.magnifier canvas { cursor: crosshair; }
+.canvas-host.panning canvas { cursor: grabbing; }
+.canvas-host.busy canvas { cursor: wait; }
+.empty-state { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; color: #9ea9b9; pointer-events: none; }
+.empty-title { font-size: 18px; font-weight: 600; color: #ebeef4; margin-bottom: 6px; }
+
+/* The Toolbar (Task 12) and the canvas column it shares the top grid row with. */
+.toolbar {
+    grid-column: 1 / 3;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 12px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.toolbar label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.toolbar input[type=number] {
+    width: 4em;
+    background: var(--surface-raised);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px;
+}
+
+.file-button {
+    position: relative;
+    overflow: hidden;
+}
+
+    .file-button input[type=file] {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        cursor: pointer;
+    }
+
+.menu {
+    position: relative;
+}
+
+.menu-items {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    min-width: 200px;
+}
+
+    .menu-items button {
+        border: none;
+        border-radius: 0;
+        text-align: left;
+    }
+
+.menu-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+}
+
+.banner {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+}
+
+    .banner .dismiss {
+        padding: 0 6px;
+        line-height: 1;
+    }
+
+.toggle.on {
+    background: var(--accent);
+    color: var(--window);
+    border-color: var(--accent);
+}
+
+.spacer {
+    flex: 1;
+}
+
+.toolbar .title {
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.canvas-column {
+    position: relative;
+    overflow: hidden;
+    background: var(--canvas);
+}
+
+.recipe-tooltip {
+    position: absolute;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 8px;
+    font-size: 12px;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 5;
+}
+
+.toast {
+    position: absolute;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    z-index: 7;
+}
+
+.button-row {
+    display: flex;
+    gap: 8px;
+}
+
+.credits-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 12px;
+}
+
+    .credits-list .credit {
+        display: flex;
+        gap: 8px;
+        padding: 4px 0;
+    }
+
+    .credits-list a {
+        color: var(--accent);
+    }
+
+    .credits-list .version,
+    .credits-list .licence {
+        color: var(--text-muted);
+    }
+
+.credits-note {
+    color: var(--text-muted);
+    font-size: 12px;
+}

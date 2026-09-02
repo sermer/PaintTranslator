@@ -1,0 +1,16 @@
+# Build context = repo root (docker build ... .). Only Core/ and Web/ are COPYed,
+# but host build output under them must not reach the container: a stale obj/
+# would be picked up by the publish and a stale relink kept silently.
+**/bin/
+**/obj/
+.git/
+.claude/
+.superpowers/
+deploy/
+docs/
+Tests/
+Tests.Web/
+Tests.Windows/
+BlendTests/
+Tools/BuildDecoders/node_modules/
+Tools/IngestSpectra/data/

@@ -1,0 +1,15 @@
+@using PaintTranslator.Web.Session
+@implements IDisposable
+@inject ConversionSession Session
+@inject IJSRuntime Js
+
+<div class="canvas-host @(Session.MagnifierActive ? "magnifier" : "") @(panning ? "panning" : "") @(Session.FullRenderInProgress ? "busy" : "")">
+    <canvas id="@CanvasId"></canvas>
+    @if (Session.Displayed == null)
+    {
+        <div class="empty-state">
+            <div class="empty-title">Drop a photo to begin</div>
+            <div class="empty-body">Drag an image here, paste from the clipboard, or choose Open Photo.</div>
+        </div>
+    }
+</div>
